@@ -32,6 +32,7 @@ export const ROSTER = [
         produces: ['stone', 'coal', 'iron_ore'],
         needs: ['tools', 'food'],
         disposition: 'Blunt and practical. Talks about work, not feelings. Keeps score of favours.',
+        goal: 'Mine stone, coal and iron ore, and keep a stock of them for Corin.',
     },
     {
         name: 'Nia',
@@ -40,6 +41,7 @@ export const ROSTER = [
         produces: ['wheat', 'carrot', 'potato'],
         needs: ['tools', 'protection'],
         disposition: 'Warm but shrewd. Generous to people who reciprocate, cool to people who do not.',
+        goal: 'Farm wheat, carrots and potatoes, and keep the fields planted.',
     },
     {
         name: 'Corin',
@@ -48,6 +50,7 @@ export const ROSTER = [
         produces: ['tools', 'armour'],
         needs: ['iron_ore', 'coal', 'food'],
         disposition: 'Proud of the craft, impatient with waste. Will make you wait if you were rude.',
+        goal: 'Smelt ore and craft tools and armour for the other villagers.',
     },
     {
         name: 'Wren',
@@ -56,6 +59,7 @@ export const ROSTER = [
         produces: ['oak_log', 'charcoal', 'planks'],
         needs: ['tools', 'food'],
         disposition: 'Quiet, observant, slow to speak. Remembers everything said near her.',
+        goal: 'Fell and replant trees, and keep a stock of logs and planks.',
     },
     {
         name: 'Odile',
@@ -64,6 +68,7 @@ export const ROSTER = [
         produces: ['shelter', 'storage'],
         needs: ['planks', 'stone', 'tools', 'food'],
         disposition: 'Ambitious and a bit grand. Always proposing the next project.',
+        goal: 'Gather stone and wood and build shelter and storage for the village.',
     },
     {
         name: 'Tobias',
@@ -72,6 +77,7 @@ export const ROSTER = [
         produces: ['bread', 'cooked_meat', 'stew'],
         needs: ['wheat', 'raw_meat', 'coal'],
         disposition: 'Sociable, gossipy, feeds people to be liked. Uses food as leverage.',
+        goal: 'Cook food and keep the village fed.',
     },
     {
         name: 'Sable',
@@ -80,6 +86,7 @@ export const ROSTER = [
         produces: ['raw_meat', 'leather', 'information'],
         needs: ['weapons', 'food', 'shelter'],
         disposition: 'Restless and independent. Trusts her own eyes over anyone else\'s account.',
+        goal: 'Explore the area, hunt animals, and report what you find.',
     },
     {
         name: 'Ivo',
@@ -88,6 +95,7 @@ export const ROSTER = [
         produces: ['brokerage', 'storage'],
         needs: ['everything', 'food'],
         disposition: 'Meticulous and political. Would rather be owed a favour than paid outright.',
+        goal: 'Gather goods into the shared chests and keep track of who owes what.',
     },
 ];
 
@@ -119,12 +127,18 @@ export function personaFor(agent) {
         'You are not an assistant. Nobody is giving you orders. Pursue your own work,',
         'ask for what you need, and remember how others have treated you.',
         '',
+        `Your standing work: ${agent.goal}`,
+        'If you do not already have an active goal, your first action is to call goal',
+        'with that standing work. It is what keeps you working when nobody is talking',
+        'to you -- without it you will stand still doing nothing.',
+        '',
         'Every turn you take exactly one action by calling one tool. There is no way to',
         'say nothing -- if you genuinely have nothing to do, call stay. Speak by calling',
         'startConversation. Keep speech to one or two short sentences, in character.',
         '',
         'Do not re-run a query whose answer you already have in this conversation.',
-        'Prefer acting over checking.',
+        'Prefer acting over checking, and prefer working over talking: you are here to',
+        'do a job, and conversation is for when you need something from someone.',
         '$SELF_PROMPT',
         '$STATS',
         '$INVENTORY',
@@ -146,6 +160,16 @@ export function profileFor(agent) {
             model: process.env.LMSTUDIO_EMBED_MODEL || 'text-embedding-nomic-embed-text-v1.5',
         },
         conversing: personaFor(agent),
+        // Pace each villager's requests.
+        //
+        // Eight agents against a 4-slot inference server starve it: every
+        // startConversation makes the recipient reply, which prompts a reply
+        // back, so demand grows combinatorially with village size while supply
+        // is fixed. Observed: 14 requests in flight, turns 31s apart, and an
+        // external probe timing out after 300s. A per-agent cooldown is the
+        // cheapest throttle that keeps the village responsive rather than
+        // uniformly slow.
+        cooldown: 3000,
         // Village metadata. Ignored by upstream, read by the Chronicle in phase 2.
         society: {
             role: agent.role,
