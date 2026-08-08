@@ -211,6 +211,43 @@ export class Prompter {
         this.last_prompt_time = Date.now();
     }
 
+    /**
+     * One turn, driven by a mandatory tool call, rendered back to command text.
+     *
+     * Returns '' on failure so promptConvo's existing retry loop handles it --
+     * three attempts, then give up, exactly as it does for a hallucinated
+     * command.
+     */
+    async _promptConvoViaTools(messages, prompt) {
+        const { buildTools, resolveToolCall, loadRegistry } = await import('../society/tools.js');
+        const { renderTurn } = await import('../society/toolCommandBridge.js');
+
+        await loadRegistry();
+        if (!this._society_tools) this._society_tools = buildTools();
+
+        const out = await this.chat_model.sendToolRequest(messages, prompt, this._society_tools);
+        if (out.error) {
+            console.warn(`${this.agent?.name ?? 'agent'}: tool turn failed -- ${out.error}`);
+            return '';
+        }
+
+        const call = out.tool_calls?.[0];
+        if (!call) {
+            console.warn(`${this.agent?.name ?? 'agent'}: model returned no tool call.`);
+            return '';
+        }
+
+        const resolved = resolveToolCall(call);
+        if (!resolved.ok) {
+            // Bad arguments are a model error, not a crash. Surfacing it as ''
+            // lets the retry loop have another go with the same history.
+            console.warn(`${this.agent?.name ?? 'agent'}: ${resolved.error}`);
+            return '';
+        }
+
+        return renderTurn(resolved.command, resolved.args);
+    }
+
     async promptConvo(messages) {
         this.most_recent_msg_time = Date.now();
         let current_msg_time = this.most_recent_msg_time;
@@ -226,7 +263,16 @@ export class Prompter {
             let generation;
 
             try {
-                generation = await this.chat_model.sendRequest(messages, prompt);
+                // A reasoning model asked for prose never terminates -- it spends
+                // the whole budget in reasoning_content and returns ''. Where the
+                // provider can force a tool call, take that path and render the
+                // result back into `!command(args)` so the rest of the agent loop
+                // is unchanged. See docs/reasoning-model.md.
+                if (typeof this.chat_model.sendToolRequest === 'function') {
+                    generation = await this._promptConvoViaTools(messages, prompt);
+                } else {
+                    generation = await this.chat_model.sendRequest(messages, prompt);
+                }
                 if (typeof generation !== 'string') {
                     console.error('Error: Generated response is not a string', generation);
                     throw new Error('Generated response is not a string');

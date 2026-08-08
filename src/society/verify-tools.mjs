@@ -107,5 +107,52 @@ for (const s of scenarios) {
     }
 }
 
+console.log('\n== 4. round-trip: tool call -> command text -> parsed args ==');
+// Everything downstream of the prompter speaks !command(args), so a rendered
+// command MUST survive upstream's own parser with identical arguments.
+const { renderTurn, renderCommand, executedArgs } = await import('./toolCommandBridge.js');
+const { parseCommandMessage, containsCommand } = await import('../agent/commands/index.js');
+
+// Upstream's parseCommandMessage validates ItemName/BlockName against
+// minecraft-data, which is only populated on bot login -- so those cases can
+// only be round-tripped with a live connection. They are covered by
+// verify-live.mjs rather than quietly skipped here.
+const roundTrip = (toolName, argsObj, label, needsMcData = false) => {
+    if (needsMcData && !mcDataReady()) {
+        console.log(`  SKIP  ${label} -- needs a connected bot, see verify-live.mjs`);
+        return;
+    }
+    const res = resolveToolCall({ function: { name: toolName, arguments: JSON.stringify(argsObj) } });
+    if (!res.ok) { check(label, false, res.error); return; }
+    const text = renderTurn(res.command, res.args);
+    const found = containsCommand(text);
+    const parsed = parseCommandMessage(text);
+    const expected = executedArgs(res.command, res.args);
+    const ok = found === res.command.name
+        && typeof parsed !== 'string'
+        && JSON.stringify(parsed.args) === JSON.stringify(expected)
+        && !/[\r\n]/.test(text);   // must stay on one line for chat
+    check(label, ok, ok ? text.slice(0, 90)
+        : `text=${JSON.stringify(text).slice(0,110)} parsed=${typeof parsed === 'string' ? parsed : JSON.stringify(parsed.args)}`);
+};
+
+roundTrip('goToCoordinates', { x: 10, y: -64, z: 30.5, closeness: 2 }, 'numbers incl. negative and decimal');
+roundTrip('givePlayer', { player_name: 'Nia', item_name: 'bread', num: 3 }, 'strings and ints', true);
+roundTrip('startConversation', { player_name: 'Nia', message: 'Will you trade wheat for iron?' }, 'speech with punctuation');
+// The parser's string form is "[^"]*" with no unescaping, so an embedded quote
+// would terminate the argument early and silently truncate the message.
+roundTrip('startConversation', { player_name: 'Nia', message: 'She said "no" to me, twice.' }, 'speech containing double quotes');
+roundTrip('startConversation', { player_name: 'Nia', message: 'line one\nline two' }, 'speech containing a newline');
+roundTrip('stats', {}, 'zero-argument command');
+
+// Speech should lead so players see words, not bare syntax.
+const conv = resolveToolCall({ function: { name: 'startConversation',
+    arguments: JSON.stringify({ player_name: 'Nia', message: 'Trade?' }) } });
+check('speech is surfaced ahead of the command',
+    conv.ok && renderTurn(conv.command, conv.args).startsWith('Trade?'),
+    conv.ok ? renderTurn(conv.command, conv.args) : conv.error);
+check('bare render omits speech',
+    conv.ok && renderCommand(conv.command, conv.args).startsWith('!startConversation'));
+
 console.log(`\n${failures === 0 ? 'ALL CHECKS PASSED' : `${failures} CHECK(S) FAILED`}\n`);
 process.exit(failures === 0 ? 0 : 1);
