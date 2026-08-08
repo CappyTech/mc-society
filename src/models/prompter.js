@@ -223,7 +223,11 @@ export class Prompter {
         const { renderTurn } = await import('../society/toolCommandBridge.js');
 
         await loadRegistry();
-        if (!this._society_tools) this._society_tools = buildTools();
+        // Scoped to the villager's trade. The full 54-tool surface is ~4,960
+        // prompt tokens on every single turn; a role subset is roughly half
+        // that. `society.role` comes from the generated profile (roster.js).
+        if (!this._society_tools)
+            this._society_tools = buildTools({ role: this.profile?.society?.role ?? null });
 
         const out = await this.chat_model.sendToolRequest(messages, prompt, this._society_tools);
         if (out.error) {

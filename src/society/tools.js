@@ -145,21 +145,83 @@ export function toolFromCommand(command) {
 }
 
 /**
- * The full tool surface offered to the model.
+ * Tools every villager gets, whatever they do for a living.
+ *
+ * Enough to perceive, move, carry, trade with each other, work a little, and
+ * speak. A villager missing any of these stops being able to participate in the
+ * village at all, so nothing here is role-specific.
+ */
+export const CORE_TOOLS = [
+    // perceive
+    'stats', 'inventory', 'nearbyBlocks', 'craftable', 'entities', 'savedPlaces',
+    // move
+    'goToPlayer', 'goToCoordinates', 'searchForBlock', 'moveAway',
+    'rememberHere', 'goToRememberedPlace',
+    // carry and exchange -- the economy runs on these
+    'givePlayer', 'consume', 'equip', 'putInChest', 'takeFromChest', 'viewChest', 'discard',
+    // work
+    'collectBlocks', 'craftRecipe', 'placeHere',
+    // speak
+    'startConversation', 'endConversation',
+    // control. `stay` is load-bearing: under forced tool calls there is no way
+    // to emit nothing, so it is the only way to do nothing.
+    'stay', 'stop', 'goal', 'endGoal', 'goToBed',
+];
+
+/**
+ * Extra tools by role, on top of CORE_TOOLS.
+ *
+ * Keyed to `society.role` in the generated profiles (see roster.js).
+ */
+export const ROLE_TOOLS = {
+    miner:    ['digDown', 'goToSurface', 'smeltItem', 'clearFurnace'],
+    farmer:   ['useOn', 'attack'],
+    smith:    ['smeltItem', 'clearFurnace', 'getCraftingPlan'],
+    forester: ['smeltItem', 'clearFurnace'],           // charcoal
+    builder:  ['getCraftingPlan', 'digDown'],
+    cook:     ['smeltItem', 'clearFurnace'],
+    scout:    ['attack', 'searchForEntity', 'followPlayer', 'goToSurface'],
+    keeper:   ['showVillagerTrades', 'tradeWithVillager', 'getCraftingPlan'],
+};
+
+/**
+ * The tool surface offered to one villager.
  *
  * `!newAction` executes model-written code. It self-guards on
  * allow_insecure_coding, but we omit it from the surface entirely when disabled
  * so the model is never invited to try -- one less injection avenue, and it
  * saves the prompt tokens.
+ *
+ * WHY THE SURFACE IS SCOPED BY ROLE
+ * ---------------------------------
+ * Every tool schema is sent on every request, and all 54 of them cost ~4,960
+ * tokens -- two thirds of a ~7,500-token turn, and the single largest term in
+ * it. The unscoped surface also asked a miner to consider `showVillagerTrades`
+ * and a cook to consider `attackPlayer` on every decision.
+ *
+ * Passing a `role` cuts this to ~30 tools. It is a prompt-size measure, not a
+ * safety boundary: everything withheld is withheld because that villager has no
+ * use for it, and `blocked` remains the mechanism for anything that must not be
+ * callable. An unknown or absent role falls back to the full surface rather
+ * than to an arbitrary subset -- a typo'd role should make a villager verbose,
+ * never mute.
  */
-export function buildTools({ blocked = null, includeQueries = true } = {}) {
+export function buildTools({ blocked = null, includeQueries = true, role = null } = {}) {
     const { actionsList, queryList } = registry();
     const blockedSet = new Set(blocked ?? settings.blocked_actions ?? []);
     if (!settings.allow_insecure_coding) blockedSet.add('!newAction');
 
+    let allowed = null;
+    if (role && ROLE_TOOLS[role]) {
+        allowed = new Set([...CORE_TOOLS, ...ROLE_TOOLS[role]]);
+    } else if (role) {
+        console.warn(`buildTools: unknown role "${role}"; offering the full tool surface.`);
+    }
+
     const commands = includeQueries ? [...queryList, ...actionsList] : [...actionsList];
     return commands
         .filter((c) => !blockedSet.has(c.name) && !blockedSet.has(toolNameFor(c.name)))
+        .filter((c) => !allowed || allowed.has(toolNameFor(c.name)))
         .map(toolFromCommand);
 }
 

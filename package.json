@@ -47,6 +47,7 @@
     "scripts": {
         "postinstall": "patch-package",
         "start": "node main.js",
+        "test": "node --test \"tests/**/*.test.js\"",
         "reinstall": "npm run clean:modules && npm ci",
         "clean:modules": "node -e \"const fs=require('fs');if(fs.existsSync('node_modules'))fs.rmSync('node_modules',{recursive:true,force:true});\""
     },
