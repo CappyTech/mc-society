@@ -4,6 +4,27 @@ import { queryList } from './queries.js';
 
 let suppressNoDomainWarning = true;
 
+/**
+ * The Chronicle, loaded lazily and used only if it loads.
+ *
+ * A static import here would drag mongoose into `commands/index.js`, which sits
+ * inside the actions/conversation/index import cycle this fork has already been
+ * bitten by (see society/tools.js), and would make `npm test` require a
+ * database to run the command tests. The import is kicked off once, in the
+ * background; until it resolves -- or if it never does -- events are simply
+ * dropped, which is the same behaviour as the Chronicle being switched off.
+ */
+let _chronicle = null;
+import('../../society/chronicle/chronicle.js')
+    .then((m) => { _chronicle = m; })
+    .catch(() => { /* the village runs perfectly well without a memory */ });
+
+function recordToChronicle(agent, commandName, args, result) {
+    try {
+        _chronicle?.observe(agent, commandName, args, result);
+    } catch { /* history must never break the command that already ran */ }
+}
+
 const commandList = queryList.concat(actionsList);
 const commandMap = {};
 for (let command of commandList) {
@@ -224,6 +245,18 @@ export async function executeCommand(agent, message) {
             return `Command ${command.name} was given ${numArgs} args, but requires ${numParams(command)} args.`;
         else {
             const result = await command.perform(agent, ...parsed.args);
+            // The village's memory is written here and nowhere else.
+            //
+            // This is the one funnel every command of every villager passes
+            // through, in both the tool path and the text path, so a single
+            // hook sees everything -- and it reads the command's *result*,
+            // which is the difference between recording what happened and
+            // recording what the model believed it did.
+            //
+            // Synchronous, non-throwing, and never awaited: see
+            // society/chronicle/chronicle.js for why nothing on a turn may
+            // wait on the database.
+            recordToChronicle(agent, parsed.commandName, parsed.args, result);
             return result;
         }
     }

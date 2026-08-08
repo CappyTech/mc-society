@@ -171,6 +171,17 @@ class ConversationManager {
         if (convo.ignore_until_start && !received.start)
             return;
 
+        // The listener's side of a conversation.
+        //
+        // Only the speaker's !startConversation passes through executeCommand,
+        // so without this hook a conversation would leave a mark on exactly one
+        // of the two relationships involved -- the speaker would remember
+        // talking to Nia while Nia remembered nothing at all.
+        try {
+            const chronicle = await import('../society/chronicle/chronicle.js').catch(() => null);
+            chronicle?.observeHeard(agent.name, sender, received.message);
+        } catch { /* never break a conversation to record one */ }
+
         // check if any convo is active besides the sender
         if (this.inConversation() && !this.inConversation(sender)) {
             this.sendToBot(sender, `I'm talking to someone else, try again later. !endConversation("${sender}")`, false, false);

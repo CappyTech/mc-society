@@ -478,6 +478,12 @@ export class Agent {
                 console.log('Agent died: ', message);
                 let death_pos = this.bot.entity.position;
                 this.memory_bank.rememberPlace('last_death_position', death_pos.x, death_pos.y, death_pos.z);
+                // Deaths are the most memorable thing that happens to a
+                // villager, and the only such event with no command behind it,
+                // so the command hook cannot see them.
+                import('../society/chronicle/chronicle.js')
+                    .then((c) => c.observeDeath(this.name, message, death_pos))
+                    .catch(() => {});
                 let death_pos_text = null;
                 if (death_pos) {
                     death_pos_text = `x: ${death_pos.x.toFixed(2)}, y: ${death_pos.y.toFixed(2)}, z: ${death_pos.z.toFixed(2)}`;
@@ -499,6 +505,17 @@ export class Agent {
 
         // Init NPC controller
         this.npc.init();
+
+        // Open the Chronicle. Fire-and-forget by design: connecting must not
+        // delay a villager joining the world, and a village with no database
+        // is a supported state, not a failure.
+        import('../society/chronicle/chronicle.js').then(async (chronicle) => {
+            chronicle.connect();
+            const { ROSTER } = await import('../society/roster.js');
+            // Idempotent upserts, so all eight processes may seed on connect
+            // without coordination. Delayed only to let the connection settle.
+            setTimeout(() => { void chronicle.seed(ROSTER); }, 5000).unref?.();
+        }).catch(() => {});
 
         // This update loop ensures that each update() is called one at a time, even if it takes longer than the interval
         const INTERVAL = 300;

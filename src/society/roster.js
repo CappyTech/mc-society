@@ -142,6 +142,10 @@ export function personaFor(agent) {
         '$SELF_PROMPT',
         '$STATS',
         '$INVENTORY',
+        // What you know about the others: who owes you, who let you down, who
+        // you are glad to see. Empty until the Chronicle has something to say,
+        // and empty whenever it is unavailable.
+        '$VILLAGE',
         // NOTE: $COMMAND_DOCS is deliberately absent.
         //
         // It renders every command as prose -- ~2,177 tokens on every turn --

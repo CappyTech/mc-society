@@ -166,6 +166,18 @@ export class Prompter {
             prompt = prompt.replaceAll('$EXAMPLES', await examples.createExampleMessage(messages));
         if (prompt.includes('$MEMORY'))
             prompt = prompt.replaceAll('$MEMORY', this.agent.history.memory);
+        // What this villager knows about the people around them. Resolves to ''
+        // whenever the Chronicle is off, down or slow, so no upstream profile
+        // is affected and a database outage costs a little context rather than
+        // a broken prompt. Capped at 900 chars -- see chronicle/brief.js.
+        if (prompt.includes('$VILLAGE')) {
+            let village = '';
+            try {
+                const chronicle = await import('../society/chronicle/chronicle.js');
+                village = await chronicle.brief(this.agent?.name, { focus: this.agent?.last_sender });
+            } catch { /* no memory is a supported state */ }
+            prompt = prompt.replaceAll('$VILLAGE', village);
+        }
         if (prompt.includes('$TO_SUMMARIZE'))
             prompt = prompt.replaceAll('$TO_SUMMARIZE', stringifyTurns(to_summarize));
         if (prompt.includes('$CONVO'))

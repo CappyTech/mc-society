@@ -3,6 +3,44 @@
 #
 #   docker compose -f docker-compose.yml -f docker-compose.village.yml up -d
 services:
+  # The Chronicle's database: the village's shared memory of who did what to
+  # whom. A dedicated instance rather than the household hcs-mongo, deliberately.
+  # These are LLM-driven processes on a game server that is open to the LAN, so
+  # anything typed in chat reaches them; putting them on hcs-net would give that
+  # surface a route to nextcloud, paperless and the finance app. A container
+  # costs almost nothing and keeps the blast radius inside this stack.
+  mongo:
+    image: mongo:8.0
+    container_name: mcs-mongo
+    restart: unless-stopped
+    # No published port at all. The village reaches it by service name over
+    # society-net; publishing would put it on the LAN, because Docker writes its
+    # iptables rules ahead of ufw's chains.
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: mcs_root
+      MONGO_INITDB_ROOT_PASSWORD: ${CHRONICLE_ROOT_PASSWORD}
+      CHRONICLE_VILLAGE_PASSWORD: ${CHRONICLE_VILLAGE_PASSWORD}
+    volumes:
+      - ./mongo-data:/data/db
+      # Runs only on an empty /data/db. Creates the scoped user the village
+      # actually authenticates as; root is break-glass and used by nothing.
+      - ./mongo-init:/docker-entrypoint-initdb.d:ro
+    # mongod wants >=64000 and the container default is 1024. This host has
+    # already lost a MongoDB to EMFILE mid index-build with the default in
+    # place -- WT_PANIC, fassert, and a crash-restart that looked exactly like
+    # a client-side network error. See CLAUDE.md.
+    ulimits:
+      nofile: { soft: 64000, hard: 64000 }
+    mem_limit: 1g
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    networks:
+      - society-net
+
   village:
     image: mc-society-runtime:dev
     container_name: mcs-village
@@ -11,6 +49,11 @@ services:
     restart: unless-stopped
     depends_on:
       paper:
+        condition: service_healthy
+      # Waited for, but the village does not need it to work: with the
+      # Chronicle unreachable every villager still takes turns, and the memory
+      # block simply renders empty. See society/chronicle/connection.js.
+      mongo:
         condition: service_healthy
     environment:
       # Village-wide settings. Per-villager persona, goal and cooldown come from
@@ -31,6 +74,9 @@ services:
       LMSTUDIO_API_KEY: ${LMSTUDIO_API_KEY}
       LMSTUDIO_CHAT_MODEL: ${LMSTUDIO_CHAT_MODEL}
       LMSTUDIO_EMBED_MODEL: ${LMSTUDIO_EMBED_MODEL}
+      # Unset this and the Chronicle stays inert and silent -- which is the
+      # supported way to run the village without a memory.
+      CHRONICLE_MONGO_URI: ${CHRONICLE_MONGO_URI}
     volumes:
       - /home/jack/code/mc-society/src:/app/src:ro
       - /home/jack/code/mc-society/profiles:/app/profiles:ro
