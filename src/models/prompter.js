@@ -298,7 +298,15 @@ export class Prompter {
                     console.error('Error: Generated response is not a string', generation);
                     throw new Error('Generated response is not a string');
                 }
-                console.log("Generated response:", generation);
+                // Log the empty case distinctly. `Generated response:` followed
+                // by nothing is what a failed turn used to print, so a village
+                // whose every request was being rejected produced a log full of
+                // lines that read like successes. The count of them even went
+                // up as things got worse, because failures are fast.
+                if (generation === '')
+                    console.warn(`${this.agent?.name ?? 'agent'}: turn produced nothing (attempt ${i + 1}/3).`);
+                else
+                    console.log("Generated response:", generation);
                 await this._saveLog(prompt, messages, generation, 'conversation');
 
             } catch (error) {
