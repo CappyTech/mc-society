@@ -142,7 +142,17 @@ export function personaFor(agent) {
         '$SELF_PROMPT',
         '$STATS',
         '$INVENTORY',
-        '$COMMAND_DOCS',
+        // NOTE: $COMMAND_DOCS is deliberately absent.
+        //
+        // It renders every command as prose -- ~2,177 tokens on every turn --
+        // which under tool calling is a second, worse copy of the tool schemas
+        // the model already receives. Worse than merely wasteful: it documents
+        // the `!command(args)` text form, inviting the model back into the
+        // prose mode this fork exists to replace, and it lists the full command
+        // set regardless of the role scoping in buildTools().
+        //
+        // Put it back only if a villager is ever driven by sendRequest() rather
+        // than sendToolRequest() -- that path has no tools and does need it.
         '$CONVO',
     ].join('\n');
 }
