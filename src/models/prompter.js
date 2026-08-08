@@ -245,7 +245,24 @@ export class Prompter {
             return '';
         }
 
-        return renderTurn(resolved.command, resolved.args);
+        const turn = renderTurn(resolved.command, resolved.args);
+
+        // Suppress an identical consecutive turn.
+        //
+        // agent.js loops up to max_commands times per message, re-prompting
+        // after each execution. The history barely changes between iterations,
+        // so the model regenerates the same call and the villager repeats
+        // themselves verbatim -- observed three times in a row in the first
+        // eight-agent run. Returning '' ends the loop cleanly, which reads as
+        // "nothing further to add" rather than an error.
+        if (turn === this._society_last_turn) {
+            console.warn(`${this.agent?.name ?? 'agent'}: repeated ${resolved.command.name}, ending turn.`);
+            this._society_last_turn = null;
+            return '';
+        }
+        this._society_last_turn = turn;
+
+        return turn;
     }
 
     async promptConvo(messages) {

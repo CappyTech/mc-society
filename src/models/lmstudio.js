@@ -47,7 +47,7 @@ export class LMStudio {
      *
      * @returns {Promise<{tool_calls: object[], text: string, usage: object}>}
      */
-    async sendToolRequest(turns, systemMessage, tools, { tool_choice = 'required', max_tokens = 768 } = {}) {
+    async sendToolRequest(turns, systemMessage, tools, { tool_choice = 'required', max_tokens = 1280 } = {}) {
         const messages = [{ role: 'system', content: systemMessage }].concat(strictFormat(turns));
         const model = this.model_name || 'andy-4.1';
 
@@ -69,12 +69,19 @@ export class LMStudio {
             // run away thinking. Trimming history will not help -- the input was
             // never the problem -- so report it rather than silently retrying.
             if (choice.finish_reason === 'length' && calls.length === 0) {
+                // Two distinct failures land here and they want different fixes,
+                // so name them apart rather than blaming reasoning for both.
+                const total = completion.usage?.completion_tokens ?? 0;
+                const reasoning = completion.usage?.completion_tokens_details?.reasoning_tokens ?? 0;
+                const runaway = reasoning >= total * 0.9;
                 return {
                     tool_calls: [],
                     text: '',
                     usage: completion.usage,
-                    error: `Model exhausted ${max_tokens} tokens without producing a tool call ` +
-                           `(${completion.usage?.completion_tokens_details?.reasoning_tokens ?? '?'} spent reasoning).`,
+                    error: runaway
+                        ? `Reasoning runaway: spent all ${total} tokens thinking, no tool call.`
+                        : `Produced ${total - reasoning} tokens of prose instead of a tool call ` +
+                          `(${reasoning} reasoning). Budget was ${max_tokens}.`,
                 };
             }
 
