@@ -32,7 +32,24 @@ export class History {
 
     async summarizeMemories(turns) {
         console.log("Storing memories...");
-        this.memory = await this.agent.prompter.promptMemSaving(turns);
+        const summary = await this.agent.prompter.promptMemSaving(turns);
+
+        // Keep the previous memory rather than overwriting it with a failure.
+        //
+        // promptMemSaving goes through sendRequest -- the prose path. Against a
+        // reasoning model that never terminates on open-ended output, that
+        // returns the adapter's error string, and this method stored it
+        // verbatim. The result was that seven of eight villagers' entire
+        // long-term memory was the literal text below, permanently: each new
+        // summarisation overwrote the last one with the same failure.
+        //
+        // A bad summary is worse than a stale one, so on failure we keep what
+        // we had. See docs/reasoning-model.md for why the prose path is unfixed.
+        if (!summary || summary === 'My brain disconnected, try again.') {
+            console.warn('Memory summarisation produced nothing usable; keeping the previous memory.');
+            return;
+        }
+        this.memory = summary;
 
         if (this.memory.length > 500) {
             this.memory = this.memory.slice(0, 500);
@@ -87,7 +104,12 @@ export class History {
                 self_prompting_state: this.agent.self_prompter.state,
                 self_prompt: this.agent.self_prompter.isStopped() ? null : this.agent.self_prompter.prompt,
                 taskStart: this.agent.task.taskStartTime,
-                last_sender: this.agent.last_sender
+                last_sender: this.agent.last_sender,
+                // MemoryBank had getJson()/loadJson() defined but called from
+                // nowhere, so every !rememberHere -- and the automatically
+                // saved last_death_position -- was lost on restart, while
+                // !rememberHere sits in every villager's core tool set.
+                memory_bank: this.agent.memory_bank?.getJson?.() ?? {}
             };
             writeFileSync(this.memory_fp, JSON.stringify(data, null, 2));
             console.log('Saved memory to:', this.memory_fp);
@@ -105,7 +127,16 @@ export class History {
             }
             const data = JSON.parse(readFileSync(this.memory_fp, 'utf8'));
             this.memory = data.memory || '';
+            // Discard a memory file already poisoned by the bug above. Guarding
+            // only the write stops new corruption but never repairs the files
+            // it already wrote: load() reads the error string back and save()
+            // writes it out again, so a villager keeps it forever. Five of
+            // eight were in exactly that state.
+            if (this.memory === 'My brain disconnected, try again.') this.memory = '';
             this.turns = data.turns || [];
+            // Absent in every memory file written before this was fixed, so it
+            // must stay optional -- those files are in production right now.
+            if (data.memory_bank) this.agent.memory_bank?.loadJson(data.memory_bank);
             console.log('Loaded memory:', this.memory);
             return data;
         } catch (error) {

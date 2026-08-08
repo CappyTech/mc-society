@@ -1,6 +1,7 @@
 import * as skills from '../library/skills.js';
 import settings from '../settings.js';
 import convoManager from '../conversation.js';
+import { buildStep, listStructures } from '../../society/build.js';
 
 
 function runAsAction (actionFn, resume = false, timeout = -1) {
@@ -306,6 +307,31 @@ export const actionsList = [
             let pos = agent.bot.entity.position;
             await skills.placeBlock(agent.bot, type, pos.x, pos.y, pos.z);
         })
+    },
+    {
+        name: '!build',
+        description: 'Build a structure from a known plan, using materials in your inventory. ' +
+                     'Call it again to continue an unfinished build; it always resumes the same site. ' +
+                     'It reports any materials you still need.',
+        params: {
+            'structure': {
+                type: 'string',
+                description: 'The plan to build.',
+                enum: listStructures(),
+            }
+        },
+        // NOT wrapped in runAsAction, deliberately.
+        //
+        // BuildGoal.wrapSkill refuses to act unless `agent.isIdle()`, and
+        // isIdle() is simply `!actions.executing` -- which runAsAction sets for
+        // the whole duration of the command. Wrapped, every block would be
+        // skipped and the build would silently place nothing at all while
+        // reporting success. BuildGoal runs its own runAction per block, so the
+        // action bookkeeping is already handled. `!newAction` is unwrapped for
+        // the same reason.
+        perform: async function (agent, structure) {
+            return await buildStep(agent, structure);
+        }
     },
     {
         name: '!attack',

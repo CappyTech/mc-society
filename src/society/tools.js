@@ -124,6 +124,12 @@ export function toolFromCommand(command) {
         schema.description = hint ? `${param.description} ${hint}` : param.description;
         applyDomain(schema, param.domain);
 
+        // A closed set of valid values, when the command has one. Worth the few
+        // tokens: it is the difference between the model picking a plan that
+        // exists and inventing a plausible-sounding one that does not, which
+        // would otherwise cost a whole wasted turn to discover.
+        if (Array.isArray(param.enum) && param.enum.length) schema.enum = [...param.enum];
+
         properties[paramName] = schema;
         // Upstream's executor requires every declared param, so all are required.
         required.push(paramName);
@@ -178,7 +184,7 @@ export const ROLE_TOOLS = {
     farmer:   ['useOn', 'attack'],
     smith:    ['smeltItem', 'clearFurnace', 'getCraftingPlan'],
     forester: ['smeltItem', 'clearFurnace'],           // charcoal
-    builder:  ['getCraftingPlan', 'digDown'],
+    builder:  ['build', 'getCraftingPlan', 'digDown'],
     cook:     ['smeltItem', 'clearFurnace'],
     scout:    ['attack', 'searchForEntity', 'followPlayer', 'goToSurface'],
     keeper:   ['showVillagerTrades', 'tradeWithVillager', 'getCraftingPlan'],
