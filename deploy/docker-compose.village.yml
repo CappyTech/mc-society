@@ -1,0 +1,92 @@
+# The villagers. Split from the server compose so the world can be restarted
+# without tearing down the agents (and vice versa).
+#
+#   docker compose -f docker-compose.yml -f docker-compose.village.yml up -d
+services:
+  village:
+    image: mc-society-runtime:dev
+    container_name: mcs-village
+    # Without this the village does not come back after a host reboot: the Paper
+    # server does (unless-stopped) and the agents do not, leaving an empty world.
+    restart: unless-stopped
+    depends_on:
+      paper:
+        condition: service_healthy
+    environment:
+      # Village-wide settings. Per-villager persona, goal and cooldown come from
+      # the generated profiles.
+      SETTINGS_JSON: >-
+        {"host":"mcs-paper","port":25565,"auth":"offline",
+         "minecraft_version":"1.21.6","auto_open_ui":false,
+         "allow_insecure_coding":false,"base_profile":"survival",
+         "max_commands":2,"load_memory":true,
+         "num_examples":1,
+         "init_message":"You have arrived in the village. Set your standing goal now so you keep working, then begin."}
+      PROFILES: >-
+        ["./profiles/village/bram.json","./profiles/village/nia.json",
+         "./profiles/village/corin.json","./profiles/village/wren.json",
+         "./profiles/village/odile.json","./profiles/village/tobias.json",
+         "./profiles/village/sable.json","./profiles/village/ivo.json"]
+      LMSTUDIO_BASE_URL: ${LMSTUDIO_BASE_URL}
+      LMSTUDIO_API_KEY: ${LMSTUDIO_API_KEY}
+      LMSTUDIO_CHAT_MODEL: ${LMSTUDIO_CHAT_MODEL}
+      LMSTUDIO_EMBED_MODEL: ${LMSTUDIO_EMBED_MODEL}
+    volumes:
+      - /home/jack/code/mc-society/src:/app/src:ro
+      - /home/jack/code/mc-society/profiles:/app/profiles:ro
+      # Operator scripts (scripts/say.mjs). Needed because a message containing
+      # a command executes without an LLM turn, which is the only way to test a
+      # command end-to-end while the inference server is unavailable.
+      - /home/jack/code/mc-society/scripts:/app/scripts:ro
+      - /home/jack/code/mc-society/keys.json:/app/keys.json:ro
+      # Which LM Studio *instance* a villager talks to is deployment config, not
+      # source -- so it lives here rather than in the repo's profiles. Each
+      # LM Studio instance has its own shared KV pool (20,736 tokens); a turn is
+      # ~9,500, so ~2 villagers fit per pool concurrently and 8 on one instance
+      # overflow it ("Context size has been exceeded"). These four are pinned to
+      # the second instance, addressed by its ":2" identifier -- a second
+      # instance is NOT transparent load-balancing, nothing reaches it unless a
+      # profile names it. The files are copies of the repo profiles with only
+      # model.model changed; if a persona changes upstream, re-copy them.
+      - ./profile-overrides/nia.json:/app/profiles/village/nia.json:ro
+      - ./profile-overrides/odile.json:/app/profiles/village/odile.json:ro
+      - ./profile-overrides/sable.json:/app/profiles/village/sable.json:ro
+      - ./profile-overrides/tobias.json:/app/profiles/village/tobias.json:ro
+      # Agent memory lives here. Unmounted it dies with the container, so every
+      # relaunch was total amnesia -- which defeats the whole point of a village
+      # that remembers. Phase 2 moves this into the Chronicle; until then the
+      # volume is what makes memory outlive a restart.
+      - ./bots:/app/bots
+    working_dir: /app
+    command: ["node", "main.js"]
+    # Liveness is "a villager completed a turn", not "the process exists".
+    #
+    # The failure this catches actually happened: with the model loaded at a
+    # 768-token context, all eight villagers connected, showed up in the player
+    # list, and failed every single turn for hours while this container read
+    # `Up` and the process stayed healthy by any ordinary measure.
+    #
+    # It marks the container unhealthy and deliberately does not restart it --
+    # when the cause is the inference server, restarting the village fixes
+    # nothing and a restart loop would bury the signal.
+    healthcheck:
+      test: ["CMD", "node", "scripts/healthcheck.mjs"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      # Eight agents have to connect, load memory and take a first turn before
+      # any beat exists; a short start period reports a false failure at boot.
+      start_period: 300s
+    # The village is the busiest thing on this host (~32% CPU steady, ~2 GiB).
+    # Nothing capped it, so a runaway agent loop could take the box down with
+    # Paper's 6 GiB heap alongside it.
+    mem_limit: 4g
+    memswap_limit: 4g
+    networks:
+      - society-net
+
+# Must match the definition in docker-compose.yml -- the two files merge into one
+# project, so a mismatched (e.g. external) declaration here fails the merge.
+networks:
+  society-net:
+    name: society-net

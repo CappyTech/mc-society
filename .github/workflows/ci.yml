@@ -1,0 +1,64 @@
+name: CI
+
+# The repo had exactly one workflow and it built the docs site. Nothing ran the
+# tests or the linter, on any branch -- so the only thing standing between a
+# broken village and the box was somebody remembering to run `npm test` locally.
+#
+# Runs on every branch, not just the default one: the work happens on
+# society/* branches, and a check that does not fire where the work happens is
+# not a check.
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 22 is what the runtime image ships (Dockerfile: node:22-bookworm-slim)
+        # and the floor in package.json engines. 24 catches upstream breakage
+        # before an image bump does.
+        node: ['22', '24']
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      # `npm ci` runs the postinstall patch-package step, which is part of what
+      # is being tested -- a broken patch should fail here, not in production.
+      - name: Install
+        run: npm ci
+
+      # The suite must pass on its EXIT CODE, not on a printed summary line: a
+      # runner can print "0 failures" while the run was truncated or left an
+      # unhandled rejection. `npm test` propagates the exit code, so no `|| true`
+      # and no piping through anything that would swallow it.
+      - name: Test
+        run: npm test
+
+      # Scoped to the fork's own code. Upstream carries 279 existing violations
+      # (mostly missing semicolons in src/utils, src/agent); failing on those
+      # would give a red build from the first run, and a build that is red for
+      # reasons nobody caused is one that gets switched off. Widen the scope by
+      # fixing a directory, not by adding it here while it still fails.
+      - name: Lint
+        run: npx eslint src/society src/models/lmstudio.js tests scripts
+
+  # Kept separate so a lint or test failure is legible on its own, and so this
+  # cannot silently become the only thing that runs.
+  build-image:
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+      # The village deploys by bind-mounting src/ into this image, so an image
+      # that does not build means the next dependency change cannot be deployed.
+      - name: Build runtime image
+        run: docker build -t mc-society-runtime:ci .

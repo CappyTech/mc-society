@@ -221,6 +221,7 @@ export class Prompter {
     async _promptConvoViaTools(messages, prompt) {
         const { buildTools, resolveToolCall, loadRegistry } = await import('../society/tools.js');
         const { renderTurn } = await import('../society/toolCommandBridge.js');
+        const { beat } = await import('../society/heartbeat.js');
 
         await loadRegistry();
         // Scoped to the villager's trade. The full 54-tool surface is ~4,960
@@ -265,6 +266,12 @@ export class Prompter {
             return '';
         }
         this._society_last_turn = turn;
+
+        // A completed turn is the container's liveness signal. It is recorded
+        // here, at the one point that proves the whole chain works -- model
+        // reachable, tool call valid, command resolved -- rather than anywhere
+        // that merely proves the process is running. See society/heartbeat.js.
+        beat(this.agent?.name);
 
         return turn;
     }

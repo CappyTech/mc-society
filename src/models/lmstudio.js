@@ -99,7 +99,7 @@ export class LMStudio {
     async sendRequest(turns, systemMessage, stop_seq='***') {
         let messages = [{ role: 'system', content: systemMessage }].concat(strictFormat(turns));
         let model = this.model_name || 'andy-4.1';
-        let res = null;
+        let res;
 
         try {
             console.log('Awaiting LM Studio response from model', model);
@@ -141,7 +141,7 @@ export class LMStudio {
         return res;
     }
 
-    async sendVisionRequest(messages, systemMessage, imageBuffer) {
+    sendVisionRequest(messages, systemMessage, imageBuffer) {
         const imageMessages = [...messages];
         imageMessages.push({
             role: 'user',

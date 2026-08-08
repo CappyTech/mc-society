@@ -1,0 +1,64 @@
+services:
+  paper:
+    image: itzg/minecraft-server
+    # The host had a 14-month-old cached copy of this image, which still called
+    # PaperMC's v2 API -- now retired and returning 410 Gone. Pin to always-pull.
+    pull_policy: always
+    container_name: mcs-paper
+    tty: true
+    stdin_open: true
+    ports:
+      # Game port. LAN-reachable (Docker bypasses ufw) but never published via frp.
+      - "25580:25565"
+      # RCON: loopback + tailnet only, never 0.0.0.0.
+      - "127.0.0.1:25585:25575"
+      - "100.70.253.120:25585:25575"
+    environment:
+      EULA: "TRUE"
+      TYPE: "PAPER"
+      VERSION: "1.21.6"
+      # JVM heap. The container limit below must stay comfortably above this --
+      # the JVM needs metaspace, thread stacks and direct buffers on top of the
+      # heap, and a limit equal to MEMORY gets the process OOM-killed rather
+      # than throwing a Java OutOfMemoryError you could read in the log.
+      MEMORY: "6G"
+      SERVER_NAME: "The Village"
+      MOTD: "The Village - LLM agent society"
+      # Mineflayer bots authenticate offline. Server is not public; see CLAUDE.md ingress notes.
+      ONLINE_MODE: "FALSE"
+      ENABLE_RCON: "TRUE"
+      RCON_PASSWORD: ${RCON_PASSWORD}
+      # Agents need chunks resident to perceive and pathfind. Keep sim distance
+      # generous but bounded -- every loaded chunk is CPU the bots compete for.
+      VIEW_DISTANCE: "10"
+      SIMULATION_DISTANCE: "8"
+      MAX_PLAYERS: "20"
+      SPAWN_PROTECTION: "0"
+      # A society needs a stable stage: no wandering mobs wrecking builds while
+      # we debug, and no night-time combat pressure until phase 3 adds needs.
+      DIFFICULTY: "easy"
+      MODE: "survival"
+      LEVEL_TYPE: "minecraft:normal"
+      SEED: "8675309"
+      # Bots idle in place while thinking (2-6s per turn). Without this they are
+      # kicked mid-deliberation.
+      OVERRIDE_SERVER_PROPERTIES: "true"
+      ENABLE_AUTOPAUSE: "FALSE"
+      JVM_XX_OPTS: "-XX:+UseG1GC"
+    volumes:
+      - ./data:/data
+    restart: unless-stopped
+    # Headroom over the 6G heap for JVM overhead (see MEMORY above). Together
+    # with the village's 4g this caps the stack at 12g of the host's 31g, so a
+    # runaway here cannot take the rest of the box down with it.
+    mem_limit: 8g
+    memswap_limit: 8g
+    networks:
+      - mc-net
+      - society-net
+
+networks:
+  mc-net:
+    external: true
+  society-net:
+    name: society-net

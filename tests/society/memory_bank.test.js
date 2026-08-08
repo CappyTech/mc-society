@@ -30,7 +30,7 @@ function fakeAgent(name, { memory_bank = new MemoryBank(), summary = null } = {}
         last_sender: null,
         self_prompter: { state: 'stopped', isStopped: () => true, prompt: null },
         task: { taskStartTime: 0 },
-        prompter: { promptMemSaving: async () => summary },
+        prompter: { promptMemSaving: () => Promise.resolve(summary) },
     };
 }
 
@@ -96,7 +96,7 @@ test('a good summarisation still replaces the memory, and still truncates', asyn
     assert.ok(h.memory.includes('Memory truncated to 500 chars'));
 });
 
-test('a memory file already poisoned by the bug heals on load', async () => {
+test('a memory file already poisoned by the bug heals on load', () => {
     // Guarding the write alone never repairs what the bug already wrote: load()
     // reads the error string back and save() writes it out again, so a villager
     // keeps it permanently. Five of eight were in that state.
