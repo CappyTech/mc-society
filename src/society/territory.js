@@ -292,7 +292,20 @@ export async function openRoadTo(nodeId, centre) {
         import('./board.js'),
     ]);
 
+    _resetForTests();          // the node we just wrote is not in the cached graph
     const g = await graph();
+
+    // The settlement's STORED centre wins over the position we were handed.
+    //
+    // Founding is first-writer-wins, so a second villager calling
+    // rememberHere("village") does not move the node -- but the position they
+    // passed is wherever *they* are standing, and using it built a road to
+    // there instead. Observed: a two-segment road heading east out of spawn
+    // while the village sat 113 blocks west, because Odile happened to be near
+    // spawn when she re-named it.
+    const self = (g.nodes ?? []).find((n) => n._id === nodeId);
+    centre = self?.centre ?? centre;
+
     const others = (g.nodes ?? []).filter((n) => n._id !== nodeId && n.centre);
     // Prefer spawn: everyone wakes there, so it is the end that matters most.
     const target = others.find((n) => n._id === SPAWN) ?? nearestNode({ nodes: others }, centre)?.node;
