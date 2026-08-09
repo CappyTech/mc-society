@@ -3,6 +3,7 @@ import * as world from './library/world.js';
 import * as mc from '../utils/mcdata.js';
 import settings from './settings.js'
 import convoManager from './conversation.js';
+import { preemptsGoal } from '../society/modeGuard.js';
 
 async function say(agent, message) {
     agent.bot.modes.behavior_log += message + '\n';
@@ -223,13 +224,21 @@ const modes_list = [
         on: true,
         active: false,
         cooldown: 5,
+        // Doubles on failure, resets on success, capped at ~5 minutes.
+        // Placing at your own feet with placeOn 'bottom' often has nothing to
+        // place against, and a spot that cannot take a torch does not become
+        // placeable by asking again five seconds later. Without this an
+        // unplaceable spot costs one attempt every five seconds forever.
+        backoff: 1,
+        max_backoff: 64,
         last_place: Date.now(),
         update: function (agent) {
             if (world.shouldPlaceTorch(agent.bot)) {
-                if (Date.now() - this.last_place < this.cooldown * 1000) return;
+                if (Date.now() - this.last_place < this.cooldown * this.backoff * 1000) return;
                 execute(this, agent, async () => {
                     const pos = agent.bot.entity.position;
-                    await skills.placeBlock(agent.bot, 'torch', pos.x, pos.y, pos.z, 'bottom', true);
+                    const placed = await skills.placeBlock(agent.bot, 'torch', pos.x, pos.y, pos.z, 'bottom', true);
+                    this.backoff = placed ? 1 : Math.min(this.backoff * 2, this.max_backoff);
                 });
                 this.last_place = Date.now();
             }
@@ -304,7 +313,10 @@ const modes_list = [
 ];
 
 async function execute(mode, agent, func, timeout=-1) {
-    if (agent.self_prompter.isActive())
+    // Only modes that interrupt everything may stop the goal loop. This used to
+    // be unconditional, so a cosmetic mode retrying on a timer switched the
+    // villager off entirely. See src/society/modeGuard.js.
+    if (preemptsGoal(mode) && agent.self_prompter.isActive())
         agent.self_prompter.stopLoop();
     let interrupted_action = agent.actions.currentActionLabel;
     mode.active = true;
