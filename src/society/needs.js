@@ -51,6 +51,7 @@
  */
 
 import { ROSTER } from './roster.js';
+import { nodeContaining, nearestNode, VILLAGE_PLACE as HEARTH_NAME } from './territory.js';
 
 /** Lower number wins. 6 is the slack line: below it, survival; at it, work. */
 export const TIER = Object.freeze({
@@ -68,14 +69,13 @@ const LINE_MAX = 160;
 /**
  * The place name every villager uses for the shared base.
  *
- * A contract between four things that cannot see each other: this module, the
- * persona text in roster.js, `!rememberHere` and `!goToRememberedPlace`. One
- * lowercase word, no punctuation, no spaces -- deliberately, because the
- * tool->text->parser round trip replaces quotes and collapses newlines
- * (toolCommandBridge.js), and a name that does not survive it byte-identically
- * fails silently and looks like the model being stupid.
+ * Owned by territory.js, where it is also the settlement's primary key, and
+ * re-exported here because the persona and this ladder both speak of it as a
+ * place rather than as a database row. One definition: a contract between the
+ * graph, the persona text, `!rememberHere` and `!goToRememberedPlace` that
+ * drifts silently if it is ever written down twice.
  */
-export const VILLAGE_PLACE = 'village';
+export const VILLAGE_PLACE = HEARTH_NAME;
 
 /**
  * Every threshold in one table, so the aggressiveness of the whole ladder is
@@ -213,29 +213,6 @@ export function readBotState(agent) {
 
 const isNight = (t) => t >= THRESHOLDS.DUSK_TICKS && t < THRESHOLDS.DAWN_TICKS;
 
-/** The settlement a villager is standing in, or null. */
-function nodeAt(graph, pos) {
-    if (!pos) return null;
-    return (graph?.nodes ?? []).find((n) => {
-        const c = n.centre;
-        if (!c) return false;
-        const dx = c.x - pos.x, dz = c.z - pos.z;
-        return Math.hypot(dx, dz) <= (n.radius ?? THRESHOLDS.NODE_RADIUS);
-    }) ?? null;
-}
-
-/** The nearest settlement, for "where do I run to". */
-function nearestNode(graph, pos) {
-    if (!pos) return null;
-    let best = null, bestD = Infinity;
-    for (const n of graph?.nodes ?? []) {
-        if (!n.centre) continue;
-        const d = Math.hypot(n.centre.x - pos.x, n.centre.z - pos.z);
-        if (d < bestD) { best = n; bestD = d; }
-    }
-    return best ? { node: best, distance: Math.round(bestD) } : null;
-}
-
 /** Highest material rank held for a tool kind, 0 if the villager has none. */
 function toolTier(inventory, kind) {
     let best = 0;
@@ -287,7 +264,7 @@ export function evaluate(bot, graph = {}, ctx = {}) {
     // in a need the villager has already decided not to act on.
     const throttled = (key) => now - (raised.get(key) ?? -Infinity) < THRESHOLDS.SOFT_TIER_MS;
 
-    const node = nodeAt(graph, bot.pos);
+    const node = nodeContaining(graph, bot.pos);
     const nearest = nearestNode(graph, bot.pos);
 
     // --- Tier 2: dark, and nowhere safe to be ------------------------------
@@ -430,11 +407,20 @@ let lastKey = new Map();
  * than throwing is the supported state, matching the Chronicle's contract: with
  * Mongo down the ladder degrades to individual survival rather than failing.
  */
-function readGraph() {
-    // Not `async` only because there is nothing to await yet. The call site
-    // awaits it regardless, so stage 3 can make this a real query without
-    // touching anything else.
-    return { nodes: [], edges: [], chest: null };
+async function readGraph(agent) {
+    try {
+        const territory = await import('./territory.js');
+        const g = await territory.graph();
+        // Mirror the shared places into this villager's own memory bank while
+        // we have them, so !goToRememberedPlace can reach anything the village
+        // knows about without a tool of its own.
+        territory.syncPlaces(agent, g);
+        return g;
+    } catch {
+        // No database is a supported state: the ladder falls back to purely
+        // individual survival rather than failing.
+        return { nodes: [], edges: [], chest: null };
+    }
 }
 
 /**

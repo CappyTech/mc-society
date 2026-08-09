@@ -80,6 +80,20 @@ export function observe(agent, commandName, args, result) {
 
         const entry = { event };
 
+        // Naming a place shares it with the whole village, and naming one
+        // "village" founds the base. The position has to come from the live
+        // bot: the command's own result string does not carry it, and the
+        // villager is standing on the spot by definition.
+        if (event.kind === 'named_place') {
+            const pos = agent?.bot?.entity?.position;
+            if (pos) {
+                observePlace(agent.name, event.detail, pos, true);
+                import('../territory.js')
+                    .then((t) => t.notePlaceNamed(agent.name, event.detail, pos))
+                    .catch(() => {});
+            }
+        }
+
         if (isSocial(event)) {
             // A relationship row is one villager's view OF THE OTHER, so the
             // event kind written into it must describe what the *other* person

@@ -512,10 +512,32 @@ export class Agent {
         import('../society/chronicle/chronicle.js').then(async (chronicle) => {
             chronicle.connect();
             const { ROSTER } = await import('../society/roster.js');
+            const territory = await import('../society/territory.js');
             // Idempotent upserts, so all eight processes may seed on connect
             // without coordination. Delayed only to let the connection settle.
-            setTimeout(() => { void chronicle.seed(ROSTER); }, 5000).unref?.();
+            setTimeout(() => {
+                void chronicle.seed(ROSTER);
+                // World spawn is the one node the graph can always assume: it
+                // is where everyone respawns, and the far end of the first road
+                // worth building.
+                territory.seedSpawn(this.bot.spawnPoint ?? this.bot.entity?.position);
+            }, 5000).unref?.();
         }).catch(() => {});
+
+        // Sleeping is what sets a respawn point, so it is what stops a death
+        // costing the whole walk back. Recorded on the settlement rather than
+        // on the agent so it survives a container restart -- and so the
+        // survival ladder can tell a villager who has never slept from one who
+        // simply logged in again.
+        this.bot.on('sleep', () => {
+            this._sleptSinceLogin = true;
+            import('../society/territory.js').then(async (t) => {
+                const g = await t.graph();
+                const pos = this.bot.entity?.position;
+                const node = t.nodeContaining(g, pos);
+                if (node) t.claimBed(node._id, this.bot.bed?.position ?? pos, this.name);
+            }).catch(() => {});
+        });
 
         // This update loop ensures that each update() is called one at a time, even if it takes longer than the interval
         const INTERVAL = 300;

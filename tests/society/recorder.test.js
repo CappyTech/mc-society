@@ -150,3 +150,15 @@ test('speaking to someone does not overwrite what you know about them', () => {
     const heard = applyEvent(undefined, { kind: 'spoke', at: Date.now() });
     assert.equal(heard.lastReason, 'talked to you');
 });
+
+test('naming a place is recorded, because the other seven cannot see it otherwise', () => {
+    // !rememberHere only ever wrote to the villager's own memory bank, which is
+    // per-process -- eight separate node processes, so a place one villager
+    // named was invisible to the rest. Deriving an event is what lets the
+    // Chronicle carry it, and what lets naming somewhere "village" found the
+    // shared base with no new tool.
+    const e = deriveEvent('!rememberHere', ['village'], 'Location saved as "village".', 'Odile');
+    assert.equal(e.kind, 'named_place');
+    assert.equal(e.detail, 'village');
+    assert.equal(e.actor, 'Odile');
+});
