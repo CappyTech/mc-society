@@ -583,6 +583,7 @@ export const actionsList = [
             }
             const { done, reason } = await exec.executeJob(agent.bot, job);
             if (done) await board.complete(job._id, agent.name);
+            else board.failed(job._id);
             skills.log(agent.bot, `${job.kind.replace('_', ' ')}: ${reason}.`);
         })
     },

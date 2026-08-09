@@ -20,9 +20,12 @@
  *
  *  - Claims expire. A villager WILL die mid-job, and without expiry that
  *    segment is orphaned for ever.
- *  - Attempts are counted. One impossible segment -- a ravine, a lava lake --
- *    must not be retried until the end of time; after ROAD_ATTEMPT_MAX it is
- *    dropped down the order so the rest of the board can proceed.
+ *  - Failed work is counted. One impossible segment -- a ravine, a lava lake --
+ *    must not be retried until the end of time; after ATTEMPT_MAX real failures
+ *    it drops off so the rest of the board can proceed. Note "failures", not
+ *    "claims": a villager who is told about a job and spends the turn on
+ *    something else has not attempted anything, and counting that emptied the
+ *    whole board to villagers who never touched it.
  *  - Block-laying is capped. Eight bots placing blocks and pathfinding on one
  *    Paper main thread, on a server already running eight LLM agents, is real
  *    load. At most MAX_CONCURRENT_BUILD villagers build at once; the others
@@ -124,7 +127,14 @@ export async function claim(who, role, { now = Date.now() } = {}) {
                     { $or: [{ roles: { $size: 0 } }, { roles: role }] },
                 ],
             },
-            { $set: { claimedBy: who, claimedAt: new Date(now) }, $inc: { attempts: 1 } },
+            // NOT $inc attempts. A claim is not an attempt: the villager is
+            // told about the job and may well spend the turn on something else
+            // entirely -- the block is context, not a control, and the model
+            // picks its own tool. Counting claims meant every job burned its
+            // three lives to villagers who never touched it, and the whole
+            // board would quietly empty itself. Expiry already handles a claim
+            // nobody acts on; attempts count real, failed work.
+            { $set: { claimedBy: who, claimedAt: new Date(now) } },
             { sort: { priority: -1, _id: 1 }, returnDocument: 'after', new: true },
         ).lean();
     } catch {
@@ -164,6 +174,22 @@ export async function complete(id, who) {
             { $set: { open: true, openedAt: new Date() } },
         );
     } catch { /* a road that stays shut is safe; one wrongly open is not */ }
+}
+
+/**
+ * Record that the work was tried and did not succeed.
+ *
+ * Counted here rather than at claim time, so the three lives a job gets are
+ * three real failures -- a segment through a ravine, or a villager with no
+ * torches -- and not three turns where somebody was told about it and did
+ * something else.
+ */
+export function failed(id) {
+    try {
+        if (!isUp() || !id) return;
+        getModels()?.Job.updateOne({ _id: id, doneAt: null }, { $inc: { attempts: 1 } })
+            .catch(() => {});
+    } catch { /* ignore */ }
 }
 
 /**
