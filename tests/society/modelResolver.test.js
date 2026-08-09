@@ -152,7 +152,7 @@ test('a choice is re-made against reality, not held for ever', async () => {
 
     let serving = [loaded('qwen/qwen3.5-9b@q4_k_m'), loaded('qwen/qwen3.5-9b')];
     const originalFetch = globalThis.fetch;
-    globalThis.fetch = async () => ({ ok: true, json: async () => ({ data: serving }) });
+    globalThis.fetch = () => Promise.resolve({ ok: true, json: () => Promise.resolve({ data: serving }) });
 
     try {
         _resetForTests();
@@ -180,7 +180,7 @@ test('an unreachable server declines rather than reusing a stale list', async ()
     // is the same failure by a slower route.
     const { resolveModel, _resetForTests } = await import('../../src/society/modelResolver.js');
     const originalFetch = globalThis.fetch;
-    globalThis.fetch = async () => { throw new Error('ECONNREFUSED'); };
+    globalThis.fetch = () => Promise.reject(new Error('ECONNREFUSED'));
     try {
         _resetForTests();
         assert.equal(await resolveModel('qwen/qwen3.5-9b', 'Bram'), null);
