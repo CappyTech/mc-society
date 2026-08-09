@@ -17,8 +17,10 @@ import assert from 'node:assert/strict';
 
 import { chooseModel, baseName } from '../../src/society/modelResolver.js';
 
-const loaded = (id, ctx = 25600) => ({ id, state: 'loaded', loaded_context_length: ctx });
-const notLoaded = (id) => ({ id, state: 'not-loaded', loaded_context_length: null });
+const loaded = (id, ctx = 25600) =>
+    ({ id, state: 'loaded', loaded_context_length: ctx, max_context_length: 262144 });
+const notLoaded = (id, max = 262144) =>
+    ({ id, state: 'not-loaded', loaded_context_length: null, max_context_length: max });
 
 test('a name that is loaded is used unchanged', () => {
     const r = chooseModel('qwen/qwen3.5-9b@q4_k_m', [loaded('qwen/qwen3.5-9b@q4_k_m')], 'Bram');
@@ -26,14 +28,36 @@ test('a name that is loaded is used unchanged', () => {
     assert.equal(r.reason, 'as configured');
 });
 
-test('a wrong quantisation suffix is corrected to the loaded instance', () => {
+test('a wrong quantisation suffix is corrected to a real catalogue entry', () => {
     // The real bug: `-Q4_K_M` where LM Studio wants `@q4_k_m`.
     const r = chooseModel('qwen/qwen3.5-9b-Q4_K_M', [
         loaded('qwen/qwen3.5-9b@q4_k_m'),
         notLoaded('qwen/qwen3.5-9b'),
     ], 'Bram');
     assert.equal(r.model, 'qwen/qwen3.5-9b@q4_k_m');
-    assert.match(r.reason, /not loaded/i);
+    assert.match(r.reason, /not available/i);
+});
+
+test('an evicted model is still a valid choice, because JIT will reload it', () => {
+    // LM Studio loads on demand and evicts on a TTL, so "loaded" is a moving
+    // target rather than a fact about the deployment -- two instances were
+    // resident one minute and gone forty minutes later with nobody touching
+    // the machine. Requiring loaded-ness meant that if the pool happened to be
+    // cold when a villager started, the resolver found nothing and fell back to
+    // the configured (possibly invalid) name -- breaking the whole village at
+    // exactly the moment it most needed resolving.
+    const r = chooseModel('qwen/qwen3.5-9b-Q4_K_M', [notLoaded('qwen/qwen3.5-9b@q4_k_m')], 'Bram');
+    assert.equal(r.model, 'qwen/qwen3.5-9b@q4_k_m');
+    assert.match(r.reason, /will load it/);
+});
+
+test('a resident instance is preferred over a cold one', () => {
+    // JIT loading a cold model costs seconds on somebody's turn, and a villager
+    // mid-conversation is the one who pays for it.
+    const models = [notLoaded('qwen/qwen3.5-9b@q4_k_m'), loaded('qwen/qwen3.5-9b@q8_0')];
+    for (const who of ['Bram', 'Nia', 'Ivo', 'Odile']) {
+        assert.equal(chooseModel('qwen/qwen3.5-9b', models, who).model, 'qwen/qwen3.5-9b@q8_0');
+    }
 });
 
 test('a second instance nobody loaded falls back to the one that exists', () => {
@@ -58,9 +82,9 @@ test('villagers spread across the instances that do exist', () => {
 test('an instance too small to hold a turn is not used', () => {
     // gemma-4-e4b:2 was loaded at 8,192 while a turn runs ~9,500. That fails
     // only once the prompt is fully assembled, which is the worst moment.
-    const r = chooseModel('gemma/x', [loaded('gemma/x@q4', 8192)], 'Bram');
+    const r = chooseModel('gemma/x', [{ id: 'gemma/x@q4', state: 'loaded', loaded_context_length: 8192, max_context_length: 8192 }], 'Bram');
     assert.notEqual(r.model, 'gemma/x@q4');
-    assert.match(r.reason, /NOT LOADED/);
+    assert.match(r.reason, /NOT AVAILABLE/);
 });
 
 test('a different model family is never substituted silently', () => {
@@ -70,14 +94,15 @@ test('a different model family is never substituted silently', () => {
     // different.
     const r = chooseModel('qwen/qwen3.5-9b', [loaded('google/gemma-4-e4b', 40704)], 'Bram');
     assert.equal(r.model, 'qwen/qwen3.5-9b');
-    assert.match(r.reason, /NOT LOADED/);
+    assert.match(r.reason, /NOT AVAILABLE/);
     assert.match(r.reason, /google\/gemma-4-e4b/, 'the operator is not told what IS available');
 });
 
-test('nothing loaded at all keeps the configured name and says so', () => {
-    const r = chooseModel('qwen/qwen3.5-9b', [notLoaded('qwen/qwen3.5-9b')], 'Bram');
+test('a model absent from the catalogue keeps the configured name and says so', () => {
+    const r = chooseModel('qwen/qwen3.5-9b', [loaded('andy-4.2')], 'Bram');
     assert.equal(r.model, 'qwen/qwen3.5-9b');
-    assert.match(r.reason, /loaded: none/);
+    assert.match(r.reason, /NOT AVAILABLE/);
+    assert.match(r.reason, /andy-4\.2/, 'the operator is not told what IS there');
 });
 
 test('a malformed or missing model list changes nothing', () => {

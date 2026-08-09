@@ -1,5 +1,23 @@
 /**
- * Pick a model that is actually loaded, instead of trusting a hardcoded id.
+ * Pick a model LM Studio can actually serve, instead of trusting a hardcoded id.
+ *
+ * LM STUDIO MAKES MODELS, IT DOES NOT CHOOSE THEM
+ * -----------------------------------------------
+ * The mental model that matters here: LM Studio JIT-loads a model when someone
+ * asks for it and evicts it again on a timer. It is not a fixed set of resident
+ * models you select from. Measured on this deployment: two instances resident
+ * one minute (40,704 and 8,192 context) and both gone forty minutes later, with
+ * nobody touching the machine.
+ *
+ * So "is it loaded?" is a question about the last few minutes, not about the
+ * deployment, and it is the wrong thing to key on. What matters is whether the
+ * id names something in the CATALOGUE -- because if it does, asking for it
+ * loads it. An earlier version of this file required loaded-ness, which meant a
+ * cold pool at startup resolved to nothing and fell back to the configured
+ * (possibly invalid) name: broken at exactly the moment resolution mattered.
+ *
+ * Loaded-ness survives only as a preference, since JIT-loading a cold model
+ * costs seconds on somebody's turn.
  *
  * WHY THIS EXISTS
  * ---------------
@@ -58,7 +76,29 @@ export function baseName(id) {
 }
 
 /**
- * Choose from what is loaded. PURE, so the policy is testable without a server.
+ * Spread villagers across instances by name.
+ *
+ * Each LM Studio instance has its own KV pool and a turn is ~9,500 tokens, so
+ * about two villagers fit per pool. This is the automatic version of
+ * hand-pinning half the roster to a second instance -- and it is a hash rather
+ * than a counter so that a villager lands on the same instance across restarts,
+ * where a counter would reshuffle everyone and throw away KV locality.
+ */
+function pick(candidates, preferred, who, note = '') {
+    const sorted = candidates.map((m) => m.id).sort();
+    let h = 0;
+    for (const ch of String(who)) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+    const chosen = sorted[h % sorted.length];
+    return {
+        model: chosen,
+        reason: preferred === chosen
+            ? 'as configured'
+            : `"${preferred}" is not available; using "${chosen}"${note}`,
+    };
+}
+
+/**
+ * Choose a model. PURE, so the policy is testable without a server.
  *
  * @param {string} preferred the id written in the profile
  * @param {object[]} models rows from /api/v0/models
@@ -66,46 +106,49 @@ export function baseName(id) {
  * @returns {{model: string, reason: string}}
  */
 export function chooseModel(preferred, models, who = '') {
-    const rows = Array.isArray(models) ? models : [];
-    const loaded = rows.filter((m) => m?.state && m.state !== 'not-loaded');
+    const rows = (Array.isArray(models) ? models : []).filter((m) => m?.id);
+    const isLoaded = (m) => m.state && m.state !== 'not-loaded';
 
-    // Exactly what was asked for, and it is up. The overwhelmingly common case.
-    if (loaded.some((m) => m.id === preferred)) {
+    // Exactly what was asked for and it is a real catalogue entry. Note this
+    // does NOT require it to be loaded: LM Studio JIT-loads on demand and
+    // evicts on a TTL, so "loaded" is a moving target rather than a fact about
+    // the deployment. Measured: two instances resident one minute and gone
+    // forty minutes later, with nobody touching the machine.
+    if (rows.some((m) => m.id === preferred)) {
         return { model: preferred, reason: 'as configured' };
     }
 
-    // Instances of the same model, big enough to hold a turn. A turn runs about
-    // 9,500 tokens, so an 8,192-context instance cannot serve one at all -- it
-    // is worse than useless, because it fails only once the prompt is fully
-    // assembled.
-    const family = loaded.filter((m) =>
-        baseName(m.id) === baseName(preferred) &&
-        (m.loaded_context_length ?? 0) >= MIN_CONTEXT);
+    // Instances of the same model big enough to hold a turn. A turn runs about
+    // 9,500 tokens, so an 8,192-context instance cannot serve one at all -- and
+    // it fails only once the prompt is fully assembled, which is the worst
+    // moment to find out.
+    //
+    // For something already loaded, the loaded context is the real limit. For
+    // anything else, its maximum is what it WILL get when JIT loads it, so
+    // judging an unloaded model on its (null) loaded context would rule out
+    // every candidate the instant the pool was evicted -- which is exactly the
+    // moment we most need to resolve to something.
+    const family = rows.filter((m) => {
+        if (baseName(m.id) !== baseName(preferred)) return false;
+        const ctx = isLoaded(m) ? (m.loaded_context_length ?? 0) : (m.max_context_length ?? 0);
+        return ctx >= MIN_CONTEXT;
+    });
 
     if (family.length) {
-        // Spread villagers across instances by name. Each LM Studio instance
-        // has its own KV pool, so two villagers sharing one is roughly the
-        // limit; this is the automatic version of hand-pinning half the roster
-        // to a second instance.
-        const sorted = family.map((m) => m.id).sort();
-        let h = 0;
-        for (const ch of String(who)) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
-        const pick = sorted[h % sorted.length];
-        return {
-            model: pick,
-            reason: preferred === pick
-                ? 'as configured'
-                : `"${preferred}" is not loaded; using ${sorted.length > 1 ? 'instance ' : ''}"${pick}"`,
-        };
+        // Prefer instances that are already up: JIT loading a cold model costs
+        // seconds on somebody's turn, and a villager that is mid-conversation
+        // pays for it.
+        const up = family.filter(isLoaded);
+        if (up.length) return pick(up, preferred, who);
+        return pick(family, preferred, who, ' (not currently loaded; LM Studio will load it)');
     }
-
     // Nothing of the right family. Say so plainly and change nothing: a
     // different model would behave differently while looking fine.
-    const alternatives = loaded.map((m) => m.id).join(', ') || 'none';
+    const alternatives = rows.map((m) => m.id).join(', ') || 'none';
     return {
         model: preferred,
-        reason: `NOT LOADED and no instance of "${baseName(preferred)}" is available `
-              + `(loaded: ${alternatives}). Requests will fail until one is loaded.`,
+        reason: `NOT AVAILABLE and no usable instance of "${baseName(preferred)}" exists `
+              + `(catalogue: ${alternatives}). Requests will fail until one is added.`,
     };
 }
 
