@@ -1,23 +1,25 @@
 /**
  * Pick a model LM Studio can actually serve, instead of trusting a hardcoded id.
  *
- * LM STUDIO MAKES MODELS, IT DOES NOT CHOOSE THEM
- * -----------------------------------------------
- * The mental model that matters here: LM Studio JIT-loads a model when someone
- * asks for it and evicts it again on a timer. It is not a fixed set of resident
- * models you select from. Measured on this deployment: two instances resident
- * one minute (40,704 and 8,192 context) and both gone forty minutes later, with
- * nobody touching the machine.
+ * NOTHING IS EVER LOADED BY ASKING FOR IT
+ * ---------------------------------------
+ * LM Studio JIT-loads a model when someone requests one and evicts it again on
+ * a timer, so a request is not merely a question -- it is an instruction to
+ * allocate VRAM. This module refuses to give that instruction. Models are
+ * loaded deliberately by whoever runs the box; the village chooses from what is
+ * already resident and does nothing at all when there is nothing suitable.
  *
- * So "is it loaded?" is a question about the last few minutes, not about the
- * deployment, and it is the wrong thing to key on. What matters is whether the
- * id names something in the CATALOGUE -- because if it does, asking for it
- * loads it. An earlier version of this file required loaded-ness, which meant a
- * cold pool at startup resolved to nothing and fell back to the configured
- * (possibly invalid) name: broken at exactly the moment resolution mattered.
+ * That is an operations decision, and the evidence for it is on this
+ * deployment. Left to load on demand, LM Studio produced an instance with an
+ * 8,192-token context against turns that run ~9,500 -- useless, and useless
+ * only once a prompt was fully assembled. It evicted resident models to make
+ * room for new ones. Capacity became a thing that happened rather than a thing
+ * anyone chose, and "how many villagers can think at once" stopped having an
+ * answer.
  *
- * Loaded-ness survives only as a preference, since JIT-loading a cold model
- * costs seconds on somebody's turn.
+ * So: choose among loaded instances, or decline. A village that plainly cannot
+ * think because nobody loaded a model is a five-second diagnosis. A village
+ * quietly thrashing a GPU is not.
  *
  * WHY THIS EXISTS
  * ---------------
@@ -43,17 +45,32 @@
  *
  * WHAT IT WILL AND WILL NOT DO
  * ----------------------------
- * It will correct a name to a loaded instance of the same model, and spread
- * villagers across multiple instances of it. It will NOT quietly move a
- * villager onto a different model family: the whole tool-calling design here is
- * tuned to one reasoning model's behaviour (see docs/reasoning-model.md), and
- * silently swapping Qwen for Gemma would change how every villager behaves
- * while looking like a config that worked. That case is logged loudly and left
- * alone, because a village that is obviously broken is better than one that is
- * subtly different.
+ * It will correct a name to a LOADED instance of the same model, and spread
+ * villagers across several such instances. It will not do anything else:
+ *
+ *  - It will not move a villager onto a different model family. The whole
+ *    tool-calling design is tuned to one reasoning model's behaviour (see
+ *    docs/reasoning-model.md), so swapping Qwen for Gemma would change how
+ *    every villager behaves while looking like a config that worked.
+ *  - It will not name a model that is not resident, because naming one is what
+ *    loads it.
+ *
+ * Both cases return null and log why. A village that obviously cannot think is
+ * better than one that is subtly different, or one quietly eating a GPU.
  */
 
+/**
+ * Context a chat model needs to be worth choosing. A villager's turn runs about
+ * 9,500 tokens, so anything under this refuses them only once the prompt is
+ * fully assembled -- the worst possible moment to find out.
+ */
 const MIN_CONTEXT = 12000;
+/**
+ * Embedding models are sized for a sentence, not a turn: the one in use here
+ * has a 2,048 maximum and is entirely correct at it. Judging it by the chat
+ * threshold would rule out every embedding model that exists.
+ */
+export const MIN_EMBED_CONTEXT = 512;
 const PROBE_TIMEOUT_MS = 4000;
 
 let cache = null;
@@ -91,9 +108,10 @@ function pick(candidates, preferred, who, note = '') {
     const chosen = sorted[h % sorted.length];
     return {
         model: chosen,
+        available: true,
         reason: preferred === chosen
             ? 'as configured'
-            : `"${preferred}" is not available; using "${chosen}"${note}`,
+            : `"${preferred}" is not loaded; using "${chosen}"${note}`,
     };
 }
 
@@ -105,60 +123,58 @@ function pick(candidates, preferred, who, note = '') {
  * @param {string} who the villager, used only to spread load deterministically
  * @returns {{model: string, reason: string}}
  */
-export function chooseModel(preferred, models, who = '') {
+export function chooseModel(preferred, models, who = '', minContext = MIN_CONTEXT) {
     const rows = (Array.isArray(models) ? models : []).filter((m) => m?.id);
     const isLoaded = (m) => m.state && m.state !== 'not-loaded';
 
-    // Exactly what was asked for and it is a real catalogue entry. Note this
-    // does NOT require it to be loaded: LM Studio JIT-loads on demand and
-    // evicts on a TTL, so "loaded" is a moving target rather than a fact about
-    // the deployment. Measured: two instances resident one minute and gone
-    // forty minutes later, with nobody touching the machine.
-    if (rows.some((m) => m.id === preferred)) {
-        return { model: preferred, reason: 'as configured' };
-    }
+    const bigEnough = (m) => (m.loaded_context_length ?? 0) >= minContext;
 
-    // Instances of the same model big enough to hold a turn. A turn runs about
-    // 9,500 tokens, so an 8,192-context instance cannot serve one at all -- and
-    // it fails only once the prompt is fully assembled, which is the worst
-    // moment to find out.
+    // Exactly what was asked for, resident, and big enough. The common case,
+    // and the only one where nothing needs saying.
     //
-    // For something already loaded, the loaded context is the real limit. For
-    // anything else, its maximum is what it WILL get when JIT loads it, so
-    // judging an unloaded model on its (null) loaded context would rule out
-    // every candidate the instant the pool was evicted -- which is exactly the
-    // moment we most need to resolve to something.
-    const family = rows.filter((m) => {
-        if (baseName(m.id) !== baseName(preferred)) return false;
-        const ctx = isLoaded(m) ? (m.loaded_context_length ?? 0) : (m.max_context_length ?? 0);
-        return ctx >= MIN_CONTEXT;
-    });
-
-    if (family.length) {
-        // Prefer instances that are already up: JIT loading a cold model costs
-        // seconds on somebody's turn, and a villager that is mid-conversation
-        // pays for it.
-        const up = family.filter(isLoaded);
-        if (up.length) return pick(up, preferred, who);
-        return pick(family, preferred, who, ' (not currently loaded; LM Studio will load it)');
+    // The size check applies here too, deliberately. Being named correctly does
+    // not make a model able to serve a turn: an instance loaded at 8,192 under
+    // exactly the configured id would be accepted and then refuse every prompt
+    // once assembled, which is the failure this whole module exists to make
+    // loud rather than silent.
+    if (rows.some((m) => m.id === preferred && isLoaded(m) && bigEnough(m))) {
+        return { model: preferred, available: true, reason: 'as configured' };
     }
-    // Nothing of the right family. Say so plainly and change nothing: a
-    // different model would behave differently while looking fine.
-    const alternatives = rows.map((m) => m.id).join(', ') || 'none';
+
+    // Resident instances of the same model, big enough to hold a turn. The
+    // loaded context is the real limit -- an unloaded model's maximum describes
+    // what it COULD have, and we are never going to be the thing that loads it.
+    //
+    // A turn runs about 9,500 tokens, so an 8,192-context instance cannot serve
+    // one at all, and fails only once the prompt is fully assembled. Better to
+    // treat it as absent than to hand villagers a model that will refuse them.
+    const family = rows.filter((m) => isLoaded(m)
+        && baseName(m.id) === baseName(preferred)
+        && bigEnough(m));
+
+    if (family.length) return pick(family, preferred, who);
+
+    // Nothing suitable is resident. Decline, rather than naming something that
+    // would cause a load -- and say what IS there, because the fix is one
+    // deliberate `lms load` on the inference box.
+    const up = rows.filter(isLoaded).map((m) => `${m.id} (${m.loaded_context_length ?? '?'})`);
     return {
-        model: preferred,
-        reason: `NOT AVAILABLE and no usable instance of "${baseName(preferred)}" exists `
-              + `(catalogue: ${alternatives}). Requests will fail until one is added.`,
+        model: null,
+        available: false,
+        reason: `no loaded instance of "${baseName(preferred)}" with at least ${minContext} context. `
+              + `Loaded: ${up.join(', ') || 'nothing'}. Load one on the inference host; `
+              + `nothing here will load it for you.`,
     };
 }
 
 /**
- * Ask LM Studio what it has and reconcile, once per process.
+ * Ask LM Studio what is resident and choose from it, once per process.
  *
- * Never throws and never blocks startup for long: if the probe fails we keep
- * the configured name, which is exactly today's behaviour.
+ * @returns {Promise<string|null>} the id to send, or null to send nothing.
+ *   Null is a real answer, not an error: it means no suitable model is loaded,
+ *   and the correct response is to take no turn rather than to cause a load.
  */
-export async function resolveModel(preferred, who = '', { baseUrl, apiKey } = {}) {
+export async function resolveModel(preferred, who = '', { baseUrl, apiKey, minContext = MIN_CONTEXT } = {}) {
     if (!preferred) return preferred;
     if (cache?.preferred === preferred && cache?.who === who) return cache.model;
 
@@ -173,12 +189,14 @@ export async function resolveModel(preferred, who = '', { baseUrl, apiKey } = {}
         });
         if (res.ok) models = (await res.json())?.data ?? [];
     } catch {
-        // Unreachable inference server is its own, very visible failure. Do not
-        // add a second one on top of it.
-        return preferred;
+        // An unreachable inference server is its own, very visible failure, and
+        // nothing can be resident on a host we cannot reach. Decline rather
+        // than guess.
+        console.warn(`[model] ${who || 'agent'}: cannot reach LM Studio to see what is loaded`);
+        return null;
     }
 
-    const { model, reason } = chooseModel(preferred, models, who);
+    const { model, reason } = chooseModel(preferred, models, who, minContext);
     if (reason !== 'as configured') console.warn(`[model] ${who || 'agent'}: ${reason}`);
     cache = { preferred, who, model };
     return model;

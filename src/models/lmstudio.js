@@ -1,6 +1,6 @@
 import OpenAIApi from 'openai';
 import { strictFormat } from '../utils/text.js';
-import { resolveModel } from '../society/modelResolver.js';
+import { resolveModel, MIN_EMBED_CONTEXT } from '../society/modelResolver.js';
 
 export class LMStudio {
     static prefix = 'lmstudio';
@@ -62,6 +62,17 @@ export class LMStudio {
     }
 
     /**
+     * Nothing suitable is loaded, so send nothing.
+     *
+     * Sending anyway is not a neutral act -- LM Studio would load a model to
+     * answer, at whatever context it felt like, evicting whatever was resident.
+     * Declining leaves the villager visibly unable to think, which is a
+     * five-second diagnosis and one deliberate `lms load` to fix.
+     */
+    static NO_MODEL = 'No suitable model is loaded on the inference server, and nothing '
+        + 'will be loaded automatically. Load one and the villagers resume.';
+
+    /**
      * Ask for a mandatory tool call.
      *
      * This is the only reliable way to bound a reasoning model's output: given
@@ -78,6 +89,9 @@ export class LMStudio {
     async sendToolRequest(turns, systemMessage, tools, { tool_choice = 'required', max_tokens = 1280 } = {}) {
         const messages = [{ role: 'system', content: systemMessage }].concat(strictFormat(turns));
         const model = await this.model();
+        if (!model) {
+            return { tool_calls: [], text: '', usage: null, error: LMStudio.NO_MODEL };
+        }
 
         const pack = {
             model,
@@ -144,6 +158,7 @@ export class LMStudio {
     async sendRequest(turns, systemMessage, stop_seq='***') {
         let messages = [{ role: 'system', content: systemMessage }].concat(strictFormat(turns));
         let model = await this.model();
+        if (!model) return LMStudio.NO_MODEL;
         let res;
 
         try {
@@ -201,11 +216,27 @@ export class LMStudio {
         return this.sendRequest(imageMessages, systemMessage);
     }
 
+    /**
+     * Embeddings, but only against a model that is already loaded.
+     *
+     * This path is the one that caused the eviction worth remembering: asking
+     * for the embedding model while the chat model was resident made LM Studio
+     * load it, and the chat model went out to make room. The villagers' actual
+     * thinking was displaced by a nicety -- embeddings here only rank example
+     * conversations, and callers already fall back to word-overlap when this
+     * throws.
+     *
+     * So the same rule as everywhere else: choose from what is loaded, and
+     * decline rather than cause a load.
+     */
     async embed(text) {
         if (text.length > 8191)
             text = text.slice(0, 8191);
+        const preferred = this.model_name || 'text-embedding-nomic-embed-text-v1.5';
+        const model = await resolveModel(preferred, this.agent_name, { minContext: MIN_EMBED_CONTEXT });
+        if (!model) throw new Error(LMStudio.NO_MODEL);
         const embedding = await this.openai.embeddings.create({
-            model: this.model_name || 'text-embedding-nomic-embed-text-v1.5',
+            model,
             input: text,
             encoding_format: 'float',
         });
