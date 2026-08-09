@@ -257,11 +257,7 @@ export { supporters };
 export async function claimGround(project) {
     if (!project?.site) return;
 
-    const [territory, site, board] = await Promise.all([
-        import('../territory.js'),
-        import('../site.js'),
-        import('../board.js'),
-    ]);
+    const territory = await import('../territory.js');
 
     const graph = await territory.graph();
     const existing = territory.nodeContaining(graph, project.site);
@@ -285,21 +281,8 @@ export async function claimGround(project) {
         });
     }
 
-    // Join it to the nearest thing already on the map. A settlement nobody can
-    // walk to safely is a place people die on the way to.
-    const from = territory.nearestNode(graph, project.site);
-    if (from && from.node._id !== id) {
-        territory.upsertEdge(from.node._id, id);
-        board.publish(site.expandProject({
-            kind: 'edge',
-            edge: { _id: [from.node._id, id].sort().join('--') },
-            from: from.node.centre,
-            to: project.site,
-        }));
-    }
-
-    board.publish(site.expandProject({
-        kind: 'node',
-        node: { _id: id, centre: project.site, radius: 24 },
-    }));
+    // Join it to the map and put its road and lighting on the board. Shared
+    // with founding the village itself, so an outpost and the base are opened
+    // the same way rather than by two code paths that can drift.
+    await territory.openRoadTo(id, project.site);
 }

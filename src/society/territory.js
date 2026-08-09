@@ -262,7 +262,55 @@ export function notePlaceNamed(owner, name, pos) {
         upsertNode(HEARTH, {
             kind: 'hearth', label: 'the village', centre: pos, foundedBy: owner,
         });
+
+        // Founding the village immediately opens the road back to spawn, and
+        // fills the board with the work of building and lighting it.
+        //
+        // This is the one road worth building before any other, and it is not
+        // decoration: spawn is where every villager wakes after dying, so a lit
+        // road from there to the village turns the worst case in the game --
+        // naked, in the dark, hundreds of blocks out, with everything you were
+        // carrying on the floor somewhere else -- into a walk home. It is the
+        // largest single brake on a death spiral, which is why it is created by
+        // the act of founding rather than waiting to be voted for.
+        void openRoadTo(HEARTH, pos).catch(() => {});
     } catch { /* never break !rememberHere */ }
+}
+
+/**
+ * Link a settlement to the nearest place already on the map, and put the road's
+ * segments and the settlement's lighting on the work board.
+ *
+ * Safe for all eight villagers to call at once: the edge id is the sorted pair
+ * of endpoints and every job id is derived from its content, so eight identical
+ * expansions collapse into one board.
+ */
+export async function openRoadTo(nodeId, centre) {
+    if (!nodeId || !centre) return;
+    const [site, board] = await Promise.all([
+        import('./site.js'),
+        import('./board.js'),
+    ]);
+
+    const g = await graph();
+    const others = (g.nodes ?? []).filter((n) => n._id !== nodeId && n.centre);
+    // Prefer spawn: everyone wakes there, so it is the end that matters most.
+    const target = others.find((n) => n._id === SPAWN) ?? nearestNode({ nodes: others }, centre)?.node;
+
+    if (target) {
+        upsertEdge(target._id, nodeId);
+        board.publish(site.expandProject({
+            kind: 'edge',
+            edge: { _id: edgeKey(target._id, nodeId) },
+            from: target.centre,
+            to: centre,
+        }));
+    }
+
+    board.publish(site.expandProject({
+        kind: 'node',
+        node: { _id: nodeId, centre, radius: 24 },
+    }));
 }
 
 /**
