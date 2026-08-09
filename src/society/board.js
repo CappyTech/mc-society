@@ -132,15 +132,38 @@ export async function claim(who, role, { now = Date.now() } = {}) {
     }
 }
 
-/** Mark a job finished. Verification happens where the villager is standing. */
-export function complete(id, who) {
+/**
+ * Mark a job finished, and open the road if that was the last piece of it.
+ *
+ * Opening the edge is what makes the work mean anything: `territory.onRoad`
+ * only counts `open` edges, so until every segment is lit the survival ladder
+ * still treats that ground as the open country it currently is. A half-built
+ * road that counted as safe would be the worst possible bug here -- it would
+ * tell villagers to walk down a dark corridor at night, confidently.
+ */
+export async function complete(id, who) {
     try {
         if (!isUp() || !id) return;
-        getModels()?.Job.updateOne(
+        const models = getModels();
+        if (!models) return;
+        await models.Job.updateOne(
             { _id: id, doneAt: null },
             { $set: { doneAt: new Date(), doneBy: who } },
-        ).catch(() => {});
-    } catch { /* ignore */ }
+        );
+
+        const job = await models.Job.findById(id).lean();
+        if (job?.kind !== 'road_segment' || !job.ref) return;
+
+        const remaining = await models.Job.countDocuments({
+            ref: job.ref, kind: 'road_segment', doneAt: null,
+        });
+        if (remaining > 0) return;
+
+        await models.Edge.updateOne(
+            { _id: job.ref, open: { $ne: true } },
+            { $set: { open: true, openedAt: new Date() } },
+        );
+    } catch { /* a road that stays shut is safe; one wrongly open is not */ }
 }
 
 /**

@@ -194,6 +194,44 @@ export function nodeContaining(g, pos) {
     }) ?? null;
 }
 
+/** How wide a strip either side of a road still counts as being on it. */
+export const ROAD_MARGIN = 4;
+
+/**
+ * Is this position on a finished, lit road?
+ *
+ * This is the payoff for the whole territory layer, and the reason it is worth
+ * building: standing on a road the village has lit is a legitimate answer to
+ * "it is dark and I am outside". Without it, infrastructure would be scenery
+ * and the survival ladder would send villagers underground every night
+ * regardless of what they had built.
+ *
+ * Only `open` edges count -- an edge whose segments are half done is a line on
+ * a map, not somewhere to stand at night. Straight-line distance to the segment
+ * between the two settlements, which matches how the road was laid out in the
+ * first place (see site.js: segments are a straight line, and the pathfinder
+ * handles the terrain).
+ */
+export function onRoad(g, pos, margin = ROAD_MARGIN) {
+    if (!pos) return false;
+    const byId = new Map((g?.nodes ?? []).map((n) => [n._id, n]));
+    for (const e of g?.edges ?? []) {
+        if (!e.open) continue;
+        const a = byId.get(e.a)?.centre, b = byId.get(e.b)?.centre;
+        if (!a || !b) continue;
+
+        // Distance from the point to the segment ab, in the horizontal plane.
+        const abx = b.x - a.x, abz = b.z - a.z;
+        const len2 = abx * abx + abz * abz;
+        if (len2 === 0) continue;
+        let t = ((pos.x - a.x) * abx + (pos.z - a.z) * abz) / len2;
+        t = Math.max(0, Math.min(1, t));
+        const dx = a.x + abx * t - pos.x, dz = a.z + abz * t - pos.z;
+        if (Math.hypot(dx, dz) <= margin) return true;
+    }
+    return false;
+}
+
 /** The closest settlement and how far away it is, for "where do I run to". */
 export function nearestNode(g, pos) {
     if (!pos) return null;
@@ -225,6 +263,31 @@ export function notePlaceNamed(owner, name, pos) {
             kind: 'hearth', label: 'the village', centre: pos, foundedBy: owner,
         });
     } catch { /* never break !rememberHere */ }
+}
+
+/**
+ * The name a villager has already given to somewhere near this spot.
+ *
+ * This is what closes the loop the village actually runs on: Sable ranges out,
+ * finds ore and calls `!rememberHere("iron_ridge")`; Odile proposes a build
+ * there; the village votes; and the settlement that appears is called
+ * `iron_ridge` rather than `small_wood_house`. The scout's word for the place
+ * is the one everybody then navigates by, which is both better naming and the
+ * only part of founding that a villager chose deliberately.
+ *
+ * Nearest wins, within `radius`. Ties are broken by name so eight processes
+ * asking at once agree.
+ */
+export async function placeNameNear(pos, radius = 32) {
+    if (!pos) return null;
+    const rows = await read((m) => m.Place.find({}).lean(), []);
+    let best = null, bestD = Infinity;
+    for (const p of rows ?? []) {
+        const d = Math.hypot(p.x - pos.x, p.z - pos.z);
+        if (d > radius) continue;
+        if (d < bestD || (d === bestD && p.name < best.name)) { best = p; bestD = d; }
+    }
+    return best ? slug(best.name) : null;
 }
 
 /**

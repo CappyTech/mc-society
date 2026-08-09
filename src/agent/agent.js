@@ -190,7 +190,11 @@ export class Agent {
         // Set up auto-eat
         this.bot.autoEat.setOpts({
             priority: 'foodPoints',
-            minHunger: 14,
+            // Raised from 14 for hard difficulty. Hunger drains faster there,
+            // and regeneration stops below 18 -- so eating late means healing
+            // not at all. The survival ladder only sees "hungry with nothing to
+            // eat", which is far too late to be the first line of defence.
+            minHunger: 16,
             bannedFood: ["rotten_flesh", "spider_eye", "poisonous_potato", "pufferfish", "chicken"]
         });
         this.bot.autoEat.enableAuto();

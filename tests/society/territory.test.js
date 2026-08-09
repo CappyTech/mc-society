@@ -13,7 +13,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-    HEARTH, SPAWN, VILLAGE_PLACE, slug, nodeContaining, nearestNode,
+    HEARTH, SPAWN, VILLAGE_PLACE, slug, nodeContaining, nearestNode, onRoad, ROAD_MARGIN,
 } from '../../src/society/territory.js';
 import { edgeKey } from '../../src/society/chronicle/models.js';
 import { TOOLS } from '../../src/society/needs.js';
@@ -88,4 +88,46 @@ test('the ladder can name a place the villager can actually walk to', () => {
     // agree about what a name looks like.
     assert.equal(TOOLS.goTo, 'goToRememberedPlace');
     assert.match(HEARTH, /^[a-z0-9_]+$/);
+});
+
+test('only a finished road counts as somewhere safe to be at night', () => {
+    // The worst possible bug in this layer would be a half-built road reading
+    // as safe: the ladder would confidently tell villagers to walk down a dark
+    // corridor after dark. Only `open` edges count, and an edge only opens when
+    // its last segment is done.
+    const nodes = [
+        { _id: 'village', centre: { x: 0, y: 64, z: 0 }, radius: 24 },
+        { _id: 'spawn', centre: { x: 200, y: 64, z: 0 }, radius: 16 },
+    ];
+    const half = { nodes, edges: [{ _id: 'spawn--village', a: 'spawn', b: 'village', open: false }] };
+    const done = { nodes, edges: [{ _id: 'spawn--village', a: 'spawn', b: 'village', open: true }] };
+    const onIt = { x: 100, y: 64, z: 0 };
+
+    assert.equal(onRoad(half, onIt), false, 'an unfinished road read as safe');
+    assert.equal(onRoad(done, onIt), true);
+});
+
+test('being near a road is not being on it', () => {
+    const nodes = [
+        { _id: 'village', centre: { x: 0, y: 64, z: 0 }, radius: 24 },
+        { _id: 'spawn', centre: { x: 200, y: 64, z: 0 }, radius: 16 },
+    ];
+    const g = { nodes, edges: [{ _id: 'spawn--village', a: 'spawn', b: 'village', open: true }] };
+    assert.equal(onRoad(g, { x: 100, y: 64, z: ROAD_MARGIN - 1 }), true);
+    assert.equal(onRoad(g, { x: 100, y: 64, z: ROAD_MARGIN + 5 }), false);
+    // Past the end of the road is off it, not on an infinite line.
+    assert.equal(onRoad(g, { x: 400, y: 64, z: 0 }), false);
+});
+
+test('a road to a settlement nobody has heard of is not walked', () => {
+    // Edges outlive nodes if a settlement is ever removed. A dangling edge must
+    // not resolve to "safe ground" somewhere in the middle of nowhere.
+    const g = {
+        nodes: [{ _id: 'village', centre: { x: 0, y: 64, z: 0 }, radius: 24 }],
+        edges: [{ _id: 'ghost--village', a: 'ghost', b: 'village', open: true }],
+    };
+    assert.doesNotThrow(() => onRoad(g, { x: 10, y: 64, z: 0 }));
+    assert.equal(onRoad(g, { x: 10, y: 64, z: 0 }), false);
+    assert.equal(onRoad(null, { x: 0, y: 64, z: 0 }), false);
+    assert.equal(onRoad({ nodes: [], edges: [] }, null), false);
 });

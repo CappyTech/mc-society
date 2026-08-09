@@ -582,7 +582,7 @@ export const actionsList = [
                 return;
             }
             const { done, reason } = await exec.executeJob(agent.bot, job);
-            if (done) board.complete(job._id, agent.name);
+            if (done) await board.complete(job._id, agent.name);
             skills.log(agent.bot, `${job.kind.replace('_', ' ')}: ${reason}.`);
         })
     },

@@ -168,3 +168,33 @@ test('a spec with no points is never done by default', () => {
     assert.equal(verifySpec({}, []).done, false);
     assert.equal(verifySpec(null, null).done, false);
 });
+
+test('founding a settlement joins it to the network, not just marks it', () => {
+    // A settlement nobody can walk to safely is a place people die on the way
+    // to. Founding has to produce the road as well as the site, or the village
+    // spreads faster than it can survive.
+    const edgeJobs = expandProject({
+        kind: 'edge',
+        edge: { _id: 'iron_ridge--village' },
+        from: { x: 0, y: 64, z: 0 },
+        to: { x: 120, y: 64, z: 0 },
+    });
+    const nodeJobs = expandProject({
+        kind: 'node',
+        node: { _id: 'iron_ridge', centre: { x: 120, y: 64, z: 0 }, radius: 24 },
+    });
+    assert.ok(edgeJobs.length > 0, 'no road to the new settlement');
+    assert.ok(nodeJobs.some((j) => j.kind === 'lattice_cell'), 'new settlement is not lit');
+    // Ids from the two halves must not collide -- they land on one board.
+    const ids = new Set([...edgeJobs, ...nodeJobs].map((j) => j._id));
+    assert.equal(ids.size, edgeJobs.length + nodeJobs.length);
+});
+
+test('an unusable target produces no jobs rather than broken ones', () => {
+    // settleStatus calls this on whatever the village agreed to, and a project
+    // with a missing or malformed site must not put nonsense on the board.
+    for (const bad of [null, undefined, {}, { kind: 'node' }, { kind: 'node', node: {} },
+                       { kind: 'edge', edge: { _id: 'a--b' } }]) {
+        assert.deepEqual(expandProject(bad), []);
+    }
+});

@@ -63,6 +63,20 @@ export async function settleStatus(project) {
     try {
         await models.Project.updateOne({ _id: project._id }, { $set: set });
     } catch { /* another process got there first, which is fine */ }
+
+    // An agreed build is also a claim on ground. Founding a settlement, joining
+    // it to the network and filling the work board all happen here, on the one
+    // transition where the village has actually decided something.
+    //
+    // Safe for all eight to run: the node id, the edge id and every job id are
+    // derived from content rather than from a counter, and every write is a
+    // $setOnInsert. Eight processes doing this simultaneously produce one
+    // settlement, one road and one board.
+    if (state.status === 'agreed') {
+        try { await claimGround({ ...project, ...set }); }
+        catch { /* the village can still build it by hand */ }
+    }
+
     return { ...project, ...set };
 }
 
@@ -223,3 +237,69 @@ export function summarise(project) {
 }
 
 export { supporters };
+
+/**
+ * Turn an agreed build into territory: a settlement, a road to it, and work.
+ *
+ * WHY THIS HANGS OFF GOVERNANCE
+ * -----------------------------
+ * Founding a settlement is the largest commitment the village makes -- it
+ * decides where everyone sleeps and which direction the roads go -- so it is
+ * the one thing that genuinely deserves a vote. The machinery for that already
+ * existed and was idle: propose, quorum, consent-by-contribution, timeout. This
+ * hangs the graph off the transition that machinery already computes.
+ *
+ * Nothing else is voted on. Lighting a cell and laying a road segment are too
+ * granular to deliberate over and go straight onto the board.
+ *
+ * @param {object} project a project that has just reached `agreed`
+ */
+export async function claimGround(project) {
+    if (!project?.site) return;
+
+    const [territory, site, board] = await Promise.all([
+        import('../territory.js'),
+        import('../site.js'),
+        import('../board.js'),
+    ]);
+
+    const graph = await territory.graph();
+    const existing = territory.nodeContaining(graph, project.site);
+
+    // A build inside somewhere the village already holds extends it rather than
+    // founding a rival settlement thirty blocks from the last one.
+    //
+    // Otherwise it takes the name a villager already gave the spot -- the scout
+    // called it "iron_ridge", so the settlement is iron_ridge and not
+    // small_wood_house. Falling back to the schematic name only when nobody has
+    // named anywhere nearby.
+    const named = existing ? null : await territory.placeNameNear(project.site);
+    const id = existing?._id ?? named ?? (territory.slug(project.name) || 'outpost');
+    if (!existing) {
+        territory.upsertNode(id, {
+            kind: 'outpost',
+            label: project.name,
+            centre: project.site,
+            foundedBy: project.proposer,
+            projectId: String(project._id),
+        });
+    }
+
+    // Join it to the nearest thing already on the map. A settlement nobody can
+    // walk to safely is a place people die on the way to.
+    const from = territory.nearestNode(graph, project.site);
+    if (from && from.node._id !== id) {
+        territory.upsertEdge(from.node._id, id);
+        board.publish(site.expandProject({
+            kind: 'edge',
+            edge: { _id: [from.node._id, id].sort().join('--') },
+            from: from.node.centre,
+            to: project.site,
+        }));
+    }
+
+    board.publish(site.expandProject({
+        kind: 'node',
+        node: { _id: id, centre: project.site, radius: 24 },
+    }));
+}

@@ -485,7 +485,10 @@ async function readGraph(agent) {
         // we have them, so !goToRememberedPlace can reach anything the village
         // knows about without a tool of its own.
         territory.syncPlaces(agent, g);
-        return g;
+        // Whether this villager is standing on lit road. Computed here rather
+        // than in evaluate() so the ladder stays pure and testable, and so the
+        // graph read pays for it once.
+        return { ...g, onRoad: territory.onRoad(g, agent?.bot?.entity?.position) };
     } catch {
         // No database is a supported state: the ladder falls back to purely
         // individual survival rather than failing.
