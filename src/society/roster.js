@@ -184,6 +184,21 @@ export function profileFor(agent) {
         // cheapest throttle that keeps the village responsive rather than
         // uniformly slow.
         cooldown: 3000,
+        // torch_placing is off for villagers.
+        //
+        // It retries every 5 seconds whenever the light is low and there is no
+        // torch nearby, and a villager without torches fails every time -- 28
+        // failures in 25 minutes, measured. That would be merely noisy except
+        // that modes.js `execute()` calls `self_prompter.stopLoop()` on EVERY
+        // mode execution, so a mode failing on a 5-second timer repeatedly
+        // kills the loop that makes a villager act at all.
+        //
+        // The rest are left on: they are either useful (self_preservation,
+        // self_defense) or rarely triggered. This one is decorative and was
+        // firing constantly.
+        modes: {
+            torch_placing: false,
+        },
         // Village metadata. Ignored by upstream, read by the Chronicle in phase 2.
         society: {
             role: agent.role,

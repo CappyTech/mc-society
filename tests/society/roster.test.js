@@ -85,3 +85,12 @@ test('a profile carries the role that scopes its tools', () => {
         assert.ok(p.cooldown > 0, `${a.name} has no cooldown and will starve the server`);
     }
 });
+
+test('villagers do not run the torch mode', () => {
+    // It retries every 5s and fails whenever the villager has no torches, and
+    // modes.js execute() stops the self-prompt loop on EVERY mode execution --
+    // so a mode failing on a timer repeatedly kills the loop that makes a
+    // villager act at all. Measured: 28 failures in 25 minutes.
+    for (const a of ROSTER)
+        assert.equal(profileFor(a).modes?.torch_placing, false, `${a.name} still runs torch_placing`);
+});

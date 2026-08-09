@@ -10,9 +10,9 @@
 import * as world from '../../agent/library/world.js';
 import { getModels, isUp, read } from '../chronicle/chronicle.js';
 import { listStructures, loadStructure, materialsFor, describeMissing, buildStep } from '../build.js';
-import { tally, outstanding, supporters, projectLine } from './tally.js';
+import { tally, outstanding, supporters, projectLine, CAN_PROPOSE } from './tally.js';
 
-export { projectLine, tally, outstanding };
+export { projectLine, tally, outstanding, CAN_PROPOSE };
 
 const NO_DB = 'I cannot reach the village record right now, so nothing can be agreed.';
 
@@ -118,7 +118,13 @@ export async function vote(agent, approve) {
     const models = getModels();
 
     const open = await settleStatus(await current());
-    if (!open || open.status !== 'proposed') return 'There is nothing to vote on at the moment.';
+    // Redirect rather than just refuse. Villagers reach for this tool
+    // speculatively -- observed three times in fifteen minutes with no proposal
+    // open -- so the reply is the cheapest place to turn a wasted turn into the
+    // thing that actually needs to happen.
+    if (!open || open.status !== 'proposed')
+        return 'There is nothing to vote on. If the village needs something built, ' +
+               'someone should propose it -- Odile or Ivo can.';
     if ((open.votes ?? []).some((v) => v.voter === agent.name))
         return `I already voted on the ${open.name}.`;
 
@@ -197,8 +203,6 @@ export async function work(agent) {
     return result;
 }
 
-/** Whether a villager may propose at all -- used to scope the tool. */
-export const CAN_PROPOSE = new Set(['builder', 'keeper']);
 
 /** For the brief: the project line this villager should see. */
 export async function lineFor(viewer) {

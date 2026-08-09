@@ -537,7 +537,9 @@ export class Agent {
 
     async update(delta) {
         await this.bot.modes.update();
-        this.self_prompter.update(delta);
+        // Pass the conversation state in so the self-prompter can notice a
+        // pause that was never lifted -- see SelfPrompter.update.
+        this.self_prompter.update(delta, convoManager.inConversation());
         await this.checkTaskDone();
     }
 
