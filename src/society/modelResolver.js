@@ -117,19 +117,34 @@ export function baseName(id) {
 }
 
 /**
- * Spread villagers across instances by name.
+ * Spread villagers across instances.
  *
  * Each LM Studio instance has its own KV pool and a turn is ~9,500 tokens, so
- * about two villagers fit per pool. This is the automatic version of
- * hand-pinning half the roster to a second instance -- and it is a hash rather
- * than a counter so that a villager lands on the same instance across restarts,
- * where a counter would reshuffle everyone and throw away KV locality.
+ * about two villagers fit per pool -- with eight of them, an even split is the
+ * difference between five contending for one pool and four in each.
+ *
+ * BY POSITION IN THE ROSTER, not by hashing the name. A hash is deterministic
+ * but not balanced: the eight real villager names hash 5/3 across two
+ * instances, quietly wasting a third of the capacity somebody deliberately
+ * loaded. Their index in a fixed roster round-robins exactly.
+ *
+ * Falls back to the hash for any name not in the roster (a test fixture, a
+ * renamed villager), which is unbalanced but stable -- and stability is the
+ * property that matters most: a villager who moves between instances on a
+ * restart throws away the KV cache their prompt prefix had warmed.
  */
-function pick(candidates, preferred, who, note = '') {
+function pick(candidates, preferred, who, peers = [], note = '') {
     const sorted = candidates.map((m) => m.id).sort();
-    let h = 0;
-    for (const ch of String(who)) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
-    const chosen = sorted[h % sorted.length];
+    const seat = peers.indexOf(who);
+    let index;
+    if (seat >= 0) {
+        index = seat % sorted.length;
+    } else {
+        let h = 0;
+        for (const ch of String(who)) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+        index = h % sorted.length;
+    }
+    const chosen = sorted[index];
     return {
         model: chosen,
         available: true,
@@ -147,7 +162,7 @@ function pick(candidates, preferred, who, note = '') {
  * @param {string} who the villager, used only to spread load deterministically
  * @returns {{model: string, reason: string}}
  */
-export function chooseModel(preferred, models, who = '', minContext = MIN_CONTEXT) {
+export function chooseModel(preferred, models, who = '', minContext = MIN_CONTEXT, peers = []) {
     const rows = (Array.isArray(models) ? models : []).filter((m) => m?.id);
     const isLoaded = (m) => m.state && m.state !== 'not-loaded';
 
@@ -176,7 +191,7 @@ export function chooseModel(preferred, models, who = '', minContext = MIN_CONTEX
         && baseName(m.id) === baseName(preferred)
         && bigEnough(m));
 
-    if (family.length) return pick(family, preferred, who);
+    if (family.length) return pick(family, preferred, who, peers);
 
     // Nothing suitable is resident. Decline, rather than naming something that
     // would cause a load -- and say what IS there, because the fix is one
@@ -225,7 +240,7 @@ export async function resolveModel(preferred, who = '', { baseUrl, apiKey, minCo
         }
     }
 
-    const { model, reason } = chooseModel(preferred, models, who, minContext);
+    const { model, reason } = chooseModel(preferred, models, who, minContext, await roster());
     // Logged on change only. Re-deciding every turn would otherwise print the
     // same correction several times a minute for every villager.
     if (reason !== 'as configured' && lastReason.get(who) !== reason) {
@@ -235,5 +250,25 @@ export async function resolveModel(preferred, who = '', { baseUrl, apiKey, minCo
     return model;
 }
 
+/**
+ * The villager names, in roster order, for an even split across instances.
+ *
+ * Imported lazily so this module stays loadable on its own: roster.js reaches
+ * territory.js and from there the Chronicle's mongoose connection, and a model
+ * resolver has no business pulling a database driver into a process that only
+ * wanted to know what is loaded.
+ */
+let peerNames = null;
+async function roster() {
+    if (peerNames) return peerNames;
+    try {
+        const { ROSTER } = await import('./roster.js');
+        peerNames = ROSTER.map((a) => a.name);
+    } catch {
+        peerNames = [];      // unbalanced but stable, which is the important half
+    }
+    return peerNames;
+}
+
 /** Test seam. */
-export function _resetForTests() { listCache = null; lastReason.clear(); }
+export function _resetForTests() { listCache = null; lastReason.clear(); peerNames = null; }

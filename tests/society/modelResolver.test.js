@@ -105,17 +105,46 @@ test('embedding models are judged by their own scale', () => {
     assert.equal(r.available, true);
 });
 
-test('villagers spread across the instances that are up', () => {
+test('villagers split EVENLY across the instances that are up', () => {
     // Each instance has its own KV pool and a turn is ~9,500 tokens, so about
-    // two villagers fit per pool. This is the automatic version of hand-pinning
-    // half the roster to a second instance.
+    // two villagers fit per pool. With eight of them an even split is the
+    // difference between five contending for one pool and four in each.
+    //
+    // Measured against the real roster: hashing the names gave 5/3, quietly
+    // wasting a third of the capacity somebody had deliberately loaded. Seat
+    // position round-robins exactly.
     const models = [loaded('qwen/qwen3.5-9b@q4_k_m'), loaded('qwen/qwen3.5-9b@q4_k_m:2')];
-    const picks = ['Bram', 'Nia', 'Corin', 'Wren', 'Odile', 'Tobias', 'Sable', 'Ivo']
-        .map((n) => chooseModel('qwen/qwen3.5-9b', models, n).model);
-    assert.equal(new Set(picks).size, 2, 'everyone landed on one instance');
+    const peers = ['Bram', 'Nia', 'Corin', 'Wren', 'Odile', 'Tobias', 'Sable', 'Ivo'];
+    const picks = peers.map((n) => chooseModel('qwen/qwen3.5-9b', models, n, undefined, peers).model);
+
+    const perInstance = {};
+    for (const p of picks) perInstance[p] = (perInstance[p] ?? 0) + 1;
+    assert.deepEqual(Object.values(perInstance).sort(), [4, 4], `split was ${JSON.stringify(perInstance)}`);
+
     // Deterministic, so a villager does not hop between instances on a restart
-    // and throw away KV locality.
-    assert.equal(chooseModel('qwen/qwen3.5-9b', models, 'Bram').model, picks[0]);
+    // and throw away the KV cache their prompt prefix had warmed.
+    assert.equal(chooseModel('qwen/qwen3.5-9b', models, 'Bram', undefined, peers).model, picks[0]);
+});
+
+test('three instances divide eight villagers as evenly as eight divides', () => {
+    const models = [loaded('m@1'), loaded('m@2'), loaded('m@3')];
+    const peers = ['Bram', 'Nia', 'Corin', 'Wren', 'Odile', 'Tobias', 'Sable', 'Ivo'];
+    const counts = {};
+    for (const n of peers) {
+        const id = chooseModel('m', models, n, undefined, peers).model;
+        counts[id] = (counts[id] ?? 0) + 1;
+    }
+    assert.deepEqual(Object.values(counts).sort(), [2, 3, 3], JSON.stringify(counts));
+});
+
+test('a name outside the roster still lands somewhere, and stays there', () => {
+    // Stability matters more than balance for a stray name: a villager who
+    // moves between instances on a restart throws away KV locality.
+    const models = [loaded('m@1'), loaded('m@2')];
+    const a = chooseModel('m', models, 'Stranger', undefined, ['Bram', 'Nia']).model;
+    const b = chooseModel('m', models, 'Stranger', undefined, ['Bram', 'Nia']).model;
+    assert.equal(a, b);
+    assert.ok(['m@1', 'm@2'].includes(a));
 });
 
 test('a half-loaded instance is not counted as up', () => {
