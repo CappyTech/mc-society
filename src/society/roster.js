@@ -24,6 +24,8 @@
  * quiet -- that villager stops needing anyone and drops out of the social graph.
  */
 
+import { VILLAGE_PLACE } from './territory.js';
+
 export const ROSTER = [
     {
         name: 'Bram',
@@ -132,6 +134,28 @@ export function personaFor(agent) {
         'with that standing work. It is what keeps you working when nobody is talking',
         'to you -- without it you will stand still doing nothing.',
         '',
+        'You can die, and death is real loss: you drop what you are carrying and wake',
+        'somewhere else. Staying alive comes before your trade, in this order -- get',
+        'under cover or back to lit ground before dark, eat before you starve, keep an',
+        'axe, a pickaxe and a sword, and sleep in a bed so you wake near the village.',
+        'Once those are settled, get back to your work.',
+        '',
+        `The village holds ground together. Its settlements are remembered by name --`,
+        `call goToRememberedPlace with "${VILLAGE_PLACE}" to get to the shared base, or`,
+        '"spawn" for where everyone wakes after dying. On lit ground you are safe at',
+        'night; away from it you are not. Food and spare tools go in the shared chest,',
+        'so look to the village stores before you go off alone: the others put things',
+        'in so that you can take them out.',
+        '',
+        // The guard on the slack line. Without it the model calls
+        // goal("stay alive") once and the villager permanently exits the
+        // economy -- the single most likely way this whole layer fails.
+        'Anything under NEEDS below is what you have noticed about your own situation',
+        'right now. It is not an order from anyone. Deal with it in your own way, in',
+        'character -- and do not change your standing goal to a survival task. Handle',
+        'it, then carry on with your trade.',
+        '$FOCUS',
+        '',
         'Every turn you take exactly one action by calling one tool. There is no way to',
         'say nothing -- if you genuinely have nothing to do, call stay. Speak by calling',
         'startConversation. Keep speech to one or two short sentences, in character.',
@@ -184,20 +208,28 @@ export function profileFor(agent) {
         // cheapest throttle that keeps the village responsive rather than
         // uniformly slow.
         cooldown: 3000,
-        // torch_placing is off for villagers.
+        // Survival modes, for a world that can now kill them.
         //
-        // It retries every 5 seconds whenever the light is low and there is no
-        // torch nearby, and a villager without torches fails every time -- 28
-        // failures in 25 minutes, measured. That would be merely noisy except
-        // that modes.js `execute()` calls `self_prompter.stopLoop()` on EVERY
-        // mode execution, so a mode failing on a 5-second timer repeatedly
-        // kills the loop that makes a villager act at all.
+        // torch_placing was off because modes.js `execute()` called
+        // `self_prompter.stopLoop()` on EVERY mode execution, so this mode
+        // failing on a 5-second timer killed the loop that makes a villager
+        // act at all -- 28 failures in 25 minutes, measured. That root cause
+        // is fixed in society/modeGuard.js: a mode may only preempt the goal
+        // loop if it already interrupts every action, which this one does not.
+        // It also backs off exponentially now. Safe to run, and it is the
+        // opportunistic complement to lighting ground deliberately.
         //
-        // The rest are left on: they are either useful (self_preservation,
-        // self_defense) or rarely triggered. This one is decorative and was
-        // firing constantly.
+        // cowardice is on for everyone except the scout, who is paid to go and
+        // look at things and cannot do it while fleeing from everything. It is
+        // listed before self_defense in modes_list and both interrupt all, so
+        // the ordering already gives "run at 16 blocks, fight only what has
+        // already closed to 8".
         modes: {
-            torch_placing: false,
+            torch_placing: true,
+            cowardice: agent.role !== 'scout',
+            creeper_awareness: true,
+            self_defense: true,
+            self_preservation: true,
         },
         // Village metadata. Ignored by upstream, read by the Chronicle in phase 2.
         society: {

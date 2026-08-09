@@ -2,8 +2,9 @@
     "modes": {
         "self_preservation": true,
         "unstuck": true,
-        "cowardice": false,
+        "cowardice": true,
         "self_defense": true,
+        "creeper_awareness": true,
         "hunting": true,
         "item_collecting": true,
         "torch_placing": true,

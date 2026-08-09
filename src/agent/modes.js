@@ -139,6 +139,34 @@ const modes_list = [
         }
     },
     {
+        // Listed before cowardice, and separate from it, because neither
+        // existing mode is a correct creeper policy.
+        //
+        // On hard the fuse is 1.5 seconds and the blast kills an unarmoured
+        // villager -- and levels whatever they were building. cowardice
+        // triggers at 16 blocks but only when isClearPath succeeds, which is a
+        // pathfinder call that fails for a creeper standing behind a wall or on
+        // a ledge, leaving the villager stood there. self_defense would make
+        // them walk TOWARDS it.
+        //
+        // The correct policy has no path check and no combat, and it must fire
+        // inside 1.5s. That is three properties that make it a mode rather than
+        // anything the model could be told: one LLM turn is ~3 seconds.
+        name: 'creeper_awareness',
+        description: 'Back away from a creeper before it can detonate. Interrupts all actions.',
+        interrupts: ['all'],
+        on: true,
+        active: false,
+        update: async function (agent) {
+            const creeper = world.getNearestEntityWhere(agent.bot, (e) => e.name === 'creeper', 7);
+            if (!creeper) return;
+            say(agent, 'Creeper!');
+            execute(this, agent, async () => {
+                await skills.moveAwayFromEntity(agent.bot, creeper, 12);
+            });
+        }
+    },
+    {
         name: 'cowardice',
         description: 'Run away from enemies. Interrupts all actions.',
         interrupts: ['all'],

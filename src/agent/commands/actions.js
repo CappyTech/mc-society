@@ -544,6 +544,37 @@ export const actionsList = [
         }
     },
     {
+        // The skill was complete and unexposed, so the farmer -- whose standing
+        // goal is "keep the fields planted" -- had no way to plant anything.
+        // Under a survival ladder whose third rung is hunger, the village's
+        // only renewable food source could not farm. Scoped to the farmer, so
+        // its ~130 tokens are paid by Nia alone.
+        name: '!tillAndSow',
+        description: 'Till the ground at the given position and plant a seed or crop there.',
+        params: {
+            'x': {type: 'float', description: 'The x coordinate.', domain: [-Infinity, Infinity]},
+            'y': {type: 'float', description: 'The y coordinate.', domain: [-64, 320]},
+            'z': {type: 'float', description: 'The z coordinate.', domain: [-Infinity, Infinity]},
+            'seed_type': {type: 'ItemName', description: 'The seed or crop to plant, e.g. wheat_seeds, carrot, potato.'},
+        },
+        perform: runAsAction(async (agent, x, y, z, seed_type) => {
+            await skills.tillAndSow(agent.bot, x, y, z, seed_type);
+        })
+    },
+    {
+        // Zero parameters, which is the cheapest schema that can exist (~40
+        // prompt tokens on every villager, every turn). It earns that because
+        // a turn is one tool call: the alternative is digDown then placeHere
+        // then placeHere, three turns and ~30 seconds, at exactly the moment
+        // mobs are spawning around a villager who is out in the open.
+        name: '!shelterHere',
+        description: 'Dig into the ground where you stand and seal yourself in for the night.',
+        params: {},
+        perform: runAsAction(async (agent) => {
+            await skills.digShelter(agent.bot);
+        })
+    },
+    {
         name: '!digDown',
         description: 'Digs down a specified distance. Will stop if it reaches lava, water, or a fall of >=4 blocks below the bot.',
         params: {'distance': { type: 'int', description: 'Distance to dig down', domain: [1, Number.MAX_SAFE_INTEGER] }},

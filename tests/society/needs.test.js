@@ -231,7 +231,6 @@ test('every rendered line names a tool that villager actually carries', () => {
     // it -- the list is meant to shrink to nothing, and an empty set here is
     // the goal state rather than a missing test.
     const pending = new Set([
-        'shelterHere',  // the tier 2 answer when you cannot get home
         'workHere',     // the work board's engine
     ]);
 

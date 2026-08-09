@@ -2091,3 +2091,53 @@ export async function useToolOn(bot, toolName, targetName) {
     log(bot, `Used ${toolName} on ${block.name}.`);
     return true;
  }
+
+export async function digShelter(bot) {
+    /**
+     * Dig into the ground where you stand and seal yourself in for the night.
+     * @param {MinecraftBot} bot, reference to the minecraft bot.
+     * @returns {Promise<boolean>} true if the bot ended up sealed underground.
+     * @example
+     * await skills.digShelter(bot);
+     **/
+
+    // Composed from primitives rather than written fresh, but it has to be ONE
+    // skill because a turn is one tool call: digDown then placeBlock then
+    // placeBlock is three turns and ~30 seconds, at exactly the moment mobs are
+    // spawning around a villager who is by definition out in the open.
+    const start = bot.entity.position.clone();
+
+    // Two down, so there is a block of headroom to seal above. Three or more
+    // and the villager cannot step back out in the morning without a ladder.
+    const dug = await digDown(bot, 2);
+    if (!dug) {
+        log(bot, `Could not dig in here.`);
+        return false;
+    }
+
+    const pos = bot.entity.position;
+    // Whatever is to hand. A shelter made of dirt is as dark as one made of
+    // stone, and a villager who owns nothing still has to survive the night --
+    // so fall back to digging sideways and pulling the ceiling in after us.
+    const fillers = ['dirt', 'cobblestone', 'stone', 'oak_planks', 'netherrack', 'andesite', 'granite', 'diorite'];
+    let roof = null;
+    for (const name of fillers) {
+        if (bot.inventory.findInventoryItem(mc.getItemId(name), null, false)) { roof = name; break; }
+    }
+
+    if (!roof) {
+        // Nothing to seal with, but two blocks down with a lip above is still
+        // far better than standing in a field: most things cannot reach in.
+        log(bot, `Dug in at ${Math.round(pos.x)}, ${Math.round(pos.y)}, ${Math.round(pos.z)} but had nothing to seal the roof with.`);
+        return false;
+    }
+
+    const placed = await placeBlock(bot, roof, start.x, start.y - 1, start.z, 'bottom', true);
+    if (!placed) {
+        log(bot, `Dug in but could not seal the roof.`);
+        return false;
+    }
+
+    log(bot, `Sealed in for the night at ${Math.round(pos.x)}, ${Math.round(pos.y)}, ${Math.round(pos.z)}.`);
+    return true;
+}
