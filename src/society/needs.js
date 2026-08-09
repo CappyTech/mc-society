@@ -86,6 +86,13 @@ export const VILLAGE_PLACE = HEARTH_NAME;
 export const THRESHOLDS = Object.freeze({
     /** Start worrying ~50s before mobs spawn, not after. */
     DUSK_TICKS: 11000,
+    /**
+     * When mobs actually start spawning.
+     *
+     * The gap between this and DUSK is the only window in which telling a
+     * villager to walk home is good advice rather than lethal advice.
+     */
+    NIGHT_TICKS: 13000,
     DAWN_TICKS: 23000,
     /** Blocks overhead that count as being under cover. */
     ROOF_SCAN: 6,
@@ -274,6 +281,33 @@ export function evaluate(bot, graph = {}, ctx = {}) {
     if (isNight(bot.timeOfDay) && !latched('exposed')) {
         const sheltered = bot.roofHeight !== null;
         const safeGround = (node && node.lit?.safe) || graph.onRoad === true;
+
+        // THE MUSTER, and note WHEN it fires: dusk only, never full night.
+        //
+        // This is the whole of "move as one organism" in one branch. Eight
+        // villagers converging on one lit settlement each evening is the most
+        // visible collective behaviour available, and it costs nothing -- they
+        // were taking a turn anyway, and it puts them where the beds and the
+        // chest are, so the next morning's work starts together.
+        //
+        // But it must not fire after dark. Once mobs are up, a villager who has
+        // already dug in is SAFE, and telling them to walk home would take a
+        // survivor and send them out into the night -- turning the collective
+        // behaviour into a collective way to die. Between DUSK and NIGHT there
+        // is roughly a minute when travelling is still free; that is the window
+        // this uses, and after it the exposure rules below take over and a
+        // sheltered villager is left where they are.
+        const dusk = bot.timeOfDay < THRESHOLDS.NIGHT_TICKS;
+        if (dusk && !node && nearest && nearest.distance <= 128 && !latched('muster')) {
+            return {
+                tier: TIER.EXPOSED, key: 'muster',
+                lines: [
+                    'The light is going, and the others will be heading in.',
+                    trim(`${nearest.node.label ?? nearest.node._id} is ${nearest.distance} blocks off -- call ${TOOLS.goTo} with "${nearest.node._id}" while you still can.`),
+                ],
+            };
+        }
+
         if (!sheltered && !safeGround) {
             const lines = ['Night, and you are in the open with nothing over you.'];
             if (nearest && nearest.distance <= 96) {

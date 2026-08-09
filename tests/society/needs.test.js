@@ -55,8 +55,11 @@ const KIT = { stone_sword: 1, stone_pickaxe: 1, stone_axe: 1 };
 const WILDS = { x: 900, y: 64, z: 900 };
 
 const lit = { safe: true, cells: 4, litCells: 4 };
+// The settlement id is literally the word villagers type into
+// goToRememberedPlace -- see territory.js. The fixture uses the real one so
+// that assertions about the rendered text are assertions about production.
 const graphWith = (over = {}) => ({
-    nodes: [{ _id: 'hearth', label: 'the hearth', centre: { x: 0, y: 64, z: 0 }, radius: 24, lit, beds: [] }],
+    nodes: [{ _id: VILLAGE_PLACE, label: 'the village', centre: { x: 0, y: 64, z: 0 }, radius: 24, lit, beds: [] }],
     edges: [], chest: null, ...over,
 });
 
@@ -258,4 +261,44 @@ test('a broken or empty world state does not throw', () => {
     for (const bad of [{}, { inventory: {} }, { pos: null, inventory: {}, timeOfDay: NIGHT }]) {
         assert.doesNotThrow(() => renderFocus(evaluate(bad, {}, ctx())));
     }
+});
+
+test('the village musters at dusk, while walking home is still safe', () => {
+    // Eight villagers converging on one lit settlement each evening is the most
+    // visible collective behaviour the design has, and it costs nothing -- they
+    // were taking a turn anyway.
+    const DUSK = 11500;
+    const away = wellFed({ timeOfDay: DUSK, roofHeight: null, pos: { x: 60, y: 64, z: 0 } });
+    const need = evaluate(away, graphWith(), ctx());
+    assert.equal(need.key, 'muster');
+    const text = renderFocus(need);
+    assert.match(text, new RegExp(TOOLS.goTo));
+    assert.match(text, /village/);
+});
+
+test('nobody is called out of shelter once the mobs are up', () => {
+    // The dangerous version of the muster, and the reason it is gated on dusk
+    // rather than on night: a villager who has already dug in is SAFE. Telling
+    // them to walk home after dark takes a survivor and sends them out into the
+    // dark, turning collective behaviour into a collective way to die.
+    const NIGHT_PROPER = 15000;
+    const duginFar = wellFed({
+        timeOfDay: NIGHT_PROPER, roofHeight: 2, pos: { x: 60, y: 64, z: 0 },
+    });
+    assert.equal(evaluate(duginFar, graphWith(), ctx()), null);
+});
+
+test('a villager already at the village is not told to go to it', () => {
+    const DUSK = 11500;
+    const home = wellFed({ timeOfDay: DUSK, roofHeight: null, pos: { x: 2, y: 64, z: 2 } });
+    assert.equal(evaluate(home, graphWith(), ctx()), null);
+});
+
+test('nobody is asked to cross the world at dusk', () => {
+    // Beyond a certain distance the honest advice is to dig in where you are.
+    const DUSK = 11500;
+    const veryFar = wellFed({ timeOfDay: DUSK, roofHeight: null, pos: { x: 900, y: 64, z: 900 } });
+    const need = evaluate(veryFar, graphWith(), ctx());
+    assert.notEqual(need?.key, 'muster');
+    assert.match(renderFocus(need), new RegExp(TOOLS.shelter));
 });
