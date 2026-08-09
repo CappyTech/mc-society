@@ -198,3 +198,20 @@ test('an unusable target produces no jobs rather than broken ones', () => {
         assert.deepEqual(expandProject(bad), []);
     }
 });
+
+test('a settlement is only safe once every cell of its lattice is lit', () => {
+    // The counters this reads were written by nothing at all for a while:
+    // `lit.cells` stayed 0 on every settlement, so `safe` was permanently
+    // false, and the survival ladder told villagers standing in their own
+    // village at night that they were exposed and should dig a hole in it.
+    //
+    // board.complete now recomputes them as lattice cells are finished, and
+    // territory.openRoadTo seeds the total when the work is first created.
+    const n = { _id: 'village', centre: { x: 0, y: 64, z: 0 }, radius: 24 };
+    const total = latticePoints(n).length;
+
+    assert.equal(litState(n, 0).safe, false);
+    assert.equal(litState(n, total - 1).safe, false, 'one dark corner is enough to spawn a mob in');
+    assert.equal(litState(n, total).safe, true);
+    assert.equal(litState(n, total).cells, total);
+});

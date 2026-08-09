@@ -162,7 +162,35 @@ export async function complete(id, who) {
         );
 
         const job = await models.Job.findById(id).lean();
-        if (job?.kind !== 'road_segment' || !job.ref) return;
+        if (!job?.ref) return;
+
+        // Lighting a cell moves a settlement toward being safe, and something
+        // has to write that down. Nothing did: `lit.cells` stayed 0 on every
+        // node, so a settlement could never report itself lit -- which made the
+        // survival ladder treat villagers standing in their own village at
+        // night as exposed, and told them to dig a hole in it.
+        if (job.kind === 'lattice_cell') {
+            const [cells, litCells] = await Promise.all([
+                models.Job.countDocuments({ ref: job.ref, kind: 'lattice_cell' }),
+                models.Job.countDocuments({ ref: job.ref, kind: 'lattice_cell', doneAt: { $ne: null } }),
+            ]);
+            await models.Node.updateOne({ _id: job.ref }, {
+                $set: {
+                    lit: {
+                        cells, litCells,
+                        // Safe means every cell of the lattice holds a torch.
+                        // Anything less is a settlement with dark corners, and
+                        // mobs spawn in the dark corners.
+                        safe: cells > 0 && litCells >= cells,
+                        checkedBy: who, checkedAt: new Date(),
+                    },
+                    updatedAt: new Date(),
+                },
+            });
+            return;
+        }
+
+        if (job.kind !== 'road_segment') return;
 
         const remaining = await models.Job.countDocuments({
             ref: job.ref, kind: 'road_segment', doneAt: null,

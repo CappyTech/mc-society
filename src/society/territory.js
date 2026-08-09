@@ -320,10 +320,27 @@ export async function openRoadTo(nodeId, centre) {
         }));
     }
 
-    board.publish(site.expandProject({
+    const nodeJobs = site.expandProject({
         kind: 'node',
         node: { _id: nodeId, centre, radius: 24 },
-    }));
+    });
+    board.publish(nodeJobs);
+
+    // Record how many cells this settlement has the moment the work exists,
+    // rather than waiting for the first one to be lit. Otherwise `lit.cells`
+    // reads 0 until somebody finishes a job, and a settlement with 0 cells
+    // cannot report itself lit -- which had the survival ladder telling
+    // villagers standing in their own village at night that they were exposed.
+    const cells = nodeJobs.filter((j) => j.kind === 'lattice_cell').length;
+    if (cells) {
+        try {
+            const models = getModels();
+            void models?.Node.updateOne(
+                { _id: nodeId, 'lit.cells': { $lt: cells } },
+                { $set: { 'lit.cells': cells, 'lit.safe': false } },
+            ).catch(() => {});
+        } catch { /* the counter is a convenience, not a dependency */ }
+    }
 }
 
 /**
