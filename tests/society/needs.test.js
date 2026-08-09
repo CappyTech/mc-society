@@ -302,3 +302,34 @@ test('nobody is asked to cross the world at dusk', () => {
     assert.notEqual(need?.key, 'muster');
     assert.match(renderFocus(need), new RegExp(TOOLS.shelter));
 });
+
+test('somebody is actually told to found the village', () => {
+    // The bootstrap. Without it the whole territory layer never starts: roads,
+    // lighting and the work board all hang off there being a settlement, and a
+    // settlement exists only once somebody names one. Observed live -- 195
+    // events, 27 goals set, zero places named, graph empty.
+    const odile = wellFed({ role: 'builder' });
+    const need = evaluate(odile, { nodes: [], edges: [] }, ctx());
+    assert.equal(need.key, 'unfounded');
+    assert.match(renderFocus(need), new RegExp(TOOLS.remember));
+    assert.match(renderFocus(need), new RegExp(`"${VILLAGE_PLACE}"`));
+});
+
+test('only the builder and the keeper are told to found it', () => {
+    // Told to all eight, six would each spend a turn founding a rival village
+    // thirty blocks apart -- and first writer wins, so five turns are wasted.
+    const empty = { nodes: [], edges: [] };
+    for (const role of ['miner', 'farmer', 'smith', 'forester', 'cook', 'scout']) {
+        assert.notEqual(evaluate(wellFed({ role }), empty, ctx())?.key, 'unfounded', role);
+    }
+    for (const role of ['builder', 'keeper']) {
+        assert.equal(evaluate(wellFed({ role }), empty, ctx())?.key, 'unfounded', role);
+    }
+});
+
+test('once the village exists nobody is asked to found it again', () => {
+    const odile = wellFed({ role: 'builder' });
+    const founded = graphWith();
+    founded.nodes[0].kind = 'hearth';
+    assert.notEqual(evaluate(odile, founded, ctx())?.key, 'unfounded');
+});

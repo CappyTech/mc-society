@@ -128,7 +128,17 @@ export const TOOLS = Object.freeze({
     place: 'placeHere',
     speak: 'startConversation',
     work: 'workHere',
+    remember: 'rememberHere',
 });
+
+/**
+ * Who may found the village.
+ *
+ * The same two trades that may propose a build (tally.js CAN_PROPOSE), for the
+ * same reason: siting the place everyone sleeps is a decision, and eight
+ * villagers each making it independently produces eight villages.
+ */
+const FOUNDERS = new Set(['builder', 'keeper']);
 
 /**
  * Food a villager may rely on, minus everything agent.js bans from auto-eat.
@@ -362,6 +372,27 @@ export function evaluate(bot, graph = {}, ctx = {}) {
             lines.push(trim(`${smith()} the smith makes tools -- ask with ${TOOLS.speak}, or gather stone and ${TOOLS.craft} one yourself.`));
             return { tier: TIER.UNARMED, key: 'unarmed', lines };
         }
+    }
+
+    // --- Tier 5a: the village has no base at all ---------------------------
+    // The bootstrap, and without it the entire territory layer never starts:
+    // roads, lighting and the work board all hang off there being a settlement,
+    // and a settlement exists only once somebody names one. Observed live --
+    // 195 events, 27 goals set, and zero places named, so the graph sat empty
+    // holding only world spawn while the villagers talked and died.
+    //
+    // Shown to the builder and the keeper alone. Told to all eight, six of them
+    // would each spend a turn founding a rival village thirty blocks apart --
+    // and the first writer would win anyway, making the other five turns waste.
+    if (!graph.nodes?.some((n) => n.kind === 'hearth') &&
+        FOUNDERS.has(bot.role) && !latched('unfounded') && !throttled('unfounded')) {
+        return {
+            tier: TIER.UNSECURED, key: 'unfounded',
+            lines: [
+                'The village has no home yet -- nowhere agreed to keep stores, sleep, or come back to after dark.',
+                trim(`If this is a decent spot, call ${TOOLS.remember} with "${VILLAGE_PLACE}" and it becomes the village.`),
+            ],
+        };
     }
 
     // --- Tier 5: nothing secured -------------------------------------------
