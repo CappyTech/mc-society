@@ -17,7 +17,9 @@ import { applyEvent } from './sentiment.js';
 import { deriveEvent, isSocial } from './recorder.js';
 import { renderBrief } from './brief.js';
 
-export { connect, isUp, getState };
+// Re-exported for src/society/projects, which needs the same guarded access
+// and must not reach around this module to the connection directly.
+export { connect, isUp, getState, getModels, read };
 
 /** Bounded so a long outage cannot grow the heap. */
 const BUFFER_MAX = 200;
@@ -104,6 +106,14 @@ export function observe(agent, commandName, args, result) {
                         update: { $set: { settledAt: event.ts } },
                     },
                 }];
+
+                // A gift to the builder of an agreed project is a contribution
+                // to it. This is why contributing needs NO new tool: !givePlayer
+                // already exists, is already hooked, and handing over materials
+                // is a far better signal of consent than a vote.
+                import('../projects/projects.js')
+                    .then((p) => p.credit(event.actor, event.subject, event.item, event.qty))
+                    .catch(() => {});
             } else {
                 // Everything else social is one-sided: the actor did it TO the
                 // subject. `spoke_to` rather than `spoke` because the speaker's
@@ -196,11 +206,24 @@ export function observePlace(owner, name, pos, shared = false) {
  *
  * @returns {Promise<string>} '' whenever the Chronicle has nothing, is slow, or is down
  */
-export async function brief(me, { focus = null, project = '' } = {}) {
+export async function brief(me, { focus = null, project = null } = {}) {
     if (!me || !isUp()) return '';
 
     const cached = briefCache.get(me);
     if (cached && Date.now() - cached.at < BRIEF_TTL_MS && cached.focus === focus) return cached.text;
+
+    // The shared project, phrased for this villager: the builder is told what
+    // is missing, a producer of a missing item is told to bring it, and anyone
+    // with nothing to contribute is told nothing at all. Broadcasting the same
+    // line to all eight would spend the budget on noise for six of them.
+    let projectLine = project ?? '';
+    if (project === null) {
+        try {
+            const { lineFor } = await import('../projects/projects.js');
+            const { byName } = await import('../roster.js');
+            projectLine = await lineFor(byName(me));
+        } catch { projectLine = ''; }
+    }
 
     const rows = await read(async (m) => {
         const [relationships, ledger] = await Promise.all([
@@ -212,7 +235,7 @@ export async function brief(me, { focus = null, project = '' } = {}) {
 
     if (!rows) return '';
 
-    const text = renderBrief({ me, ...rows, focus, project });
+    const text = renderBrief({ me, ...rows, focus, project: projectLine });
     briefCache.set(me, { at: Date.now(), text, focus });
     return text;
 }

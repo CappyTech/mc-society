@@ -218,18 +218,32 @@ async function runBuildPass(agent, construction, site, orientation) {
  *
  * @returns {string} a sentence for the model
  */
-export async function buildStep(agent, name) {
+export async function buildStep(agent, name, { site: agreedSite = null } = {}) {
     const construction = agent.npc?.constructions?.[name];
     if (!construction)
         return `I don't know how to build "${name}". I can build: ${listStructures().join(', ')}.`;
 
-    // Reuse the site across calls, so repeated builds continue one structure
-    // instead of starting a new one alongside it. MemoryBank now persists
-    // (see src/agent/history.js), so this also survives a restart.
-    let site = agent.memory_bank?.recallPlace(siteKey(name));
+    // An agreed site wins over a private one.
+    //
+    // A village project is proposed at a specific place and voted through on
+    // that basis. Without this the builder quietly builds wherever she happens
+    // to have started before -- observed: the village agreed a house at
+    // 17,70,77 and Odile built it at -2,60,65, which is not the thing that was
+    // agreed to. It is also written back, so the two never diverge again.
+    let site = agreedSite
+        ? { x: agreedSite.x, y: agreedSite.y, z: agreedSite.z }
+        : null;
     if (site) {
+        agent.memory_bank?.rememberPlace(siteKey(name), site.x, site.y, site.z);
+    }
+
+    // Otherwise reuse the site across calls, so repeated builds continue one
+    // structure instead of starting a new one alongside it. MemoryBank now
+    // persists (see src/agent/history.js), so this survives a restart too.
+    if (!site) site = agent.memory_bank?.recallPlace(siteKey(name));
+    if (Array.isArray(site)) {
         site = { x: site[0], y: site[1], z: site[2] };
-    } else {
+    } else if (!site) {
         const sizex = construction.blocks[0][0].length;
         for (let x = 0; x < sizex; x++) {
             site = world.getNearestFreeSpace(agent.bot, sizex - x, 16);

@@ -334,6 +334,51 @@ export const actionsList = [
         }
     },
     {
+        name: '!proposeProject',
+        description: 'Propose that the village builds something together, at your current location. ' +
+                     'The others vote on it. Only one proposal at a time.',
+        params: {
+            'structure': {
+                type: 'string',
+                description: 'What to propose building.',
+                enum: listStructures(),
+            }
+        },
+        perform: async function (agent, structure) {
+            const p = await import('../../society/projects/projects.js');
+            return await p.propose(agent, structure);
+        }
+    },
+    {
+        name: '!voteProject',
+        description: 'Vote on the village project someone has proposed.',
+        // No project id, deliberately. At most one proposal is open at a time
+        // (enforced by a partial unique index), so there is nothing to
+        // disambiguate -- and asking the model for an id would mostly get an
+        // invented one. This is the only one of the three tools every villager
+        // carries, so its schema is kept as small as it can be.
+        params: {
+            'approve': { type: 'boolean', description: 'true to agree to it, false to object.' }
+        },
+        perform: async function (agent, approve) {
+            const p = await import('../../society/projects/projects.js');
+            return await p.vote(agent, approve);
+        }
+    },
+    {
+        name: '!workOnProject',
+        description: 'Do a shift on the village project that has been agreed. ' +
+                     'Reports what materials are still needed.',
+        params: {},
+        // Unwrapped for the same reason as !build -- it calls buildStep, which
+        // opens its own action, and BuildGoal refuses to act unless the agent
+        // is idle. See src/society/build.js.
+        perform: async function (agent) {
+            const p = await import('../../society/projects/projects.js');
+            return await p.work(agent);
+        }
+    },
+    {
         name: '!attack',
         description: 'Attack and kill the nearest entity of a given type.',
         params: {'type': { type: 'string', description: 'The type of entity to attack.'}},

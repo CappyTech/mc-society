@@ -162,3 +162,72 @@ docker exec mcs-village node -e "
     c.connect(); await new Promise(r => setTimeout(r, 2500));
     console.log(await c.brief('Nia', { focus: 'Bram' })); process.exit(0); })"
 ```
+
+## Governance and shared projects
+
+Villager conversation is strictly 1:1 with one partner at a time, so an
+eight-way town meeting is O(n²) full LLM turns against an inference server that
+already starves at eight agents. Consensus by conversation would cost dozens of
+~4,500-token turns and reliably deadlock.
+
+**So the Chronicle is the town square.** A proposal is a document, the debate is
+asynchronous, and the ballot box is the prompt: each villager sees the open
+proposal in their `VILLAGE` block and answers with one cheap tool call.
+
+```
+propose  ->  vote  ->  supply  ->  build
+```
+
+A partial unique index allows **one open proposal village-wide**, which is what
+lets `voteProject(approve)` take no project id — there is nothing to
+disambiguate, it saves prompt tokens, and it stops the model inventing
+ObjectIds, which it would.
+
+### Three rules stop it deadlocking
+
+These are load-bearing, not polish, and all three fail *silently*: the village
+simply never builds anything again, with the single proposal slot held forever.
+
+- **Vote timeout, 20 minutes**, evaluated lazily on any read — there are eight
+  independent agent processes and no leader, so nothing time-based can rely on
+  a timer. At timeout: agreed if more in favour than against and at least three
+  in favour, otherwise dropped. Villagers are usually busy mining and will
+  simply not vote.
+- **Consent by contribution.** Handing over a required material counts as a
+  yes, and overrides an earlier objection. It is a better signal than a vote,
+  and it is what carries the system when the model ignores the proposal line —
+  which it will, often. **Injected context is a suggestion, not a control.**
+- **The proposer counts as being in favour.** Making them vote for their own
+  proposal is ceremony that costs a whole LLM turn.
+
+### Cost
+
+Three tools, only one of which everyone pays for:
+
+| tool | offered to | cost |
+| --- | --- | --- |
+| `voteProject(approve)` | all eight | **83 tok/turn** |
+| `proposeProject(name)` | builder, keeper | ~100 tok |
+| `workOnProject()` | builder | ~45 tok |
+
+The universal cost is ~1.8% of a turn. If measurement ever shows villagers
+never voting, delete `voteProject` and reclaim it — consent by contribution
+already provides most of the value.
+
+### Contributing needs no tool at all
+
+`!givePlayer` already exists and is already hooked by the recorder, so a gift to
+the builder of an agreed project is credited to it automatically. The brief is
+targeted rather than broadcast: the builder is told what is missing, a producer
+of a missing item is told to bring it, and everyone else is told nothing —
+broadcasting to all eight would spend the budget on noise for six of them.
+
+### Two things caught only by running it
+
+- **The agreed site wins over the builder's own.** A project is voted through
+  at a place; without this the builder quietly built wherever she had last
+  started something. Observed: the village agreed a house at 17,70,77 and Odile
+  built at -2,60,65.
+- **A proposal's site must be buildable before it is put to the village.** The
+  proposer's raw position is wherever they happen to be standing — Odile
+  proposed from a treetop and every block reported "nothing to place on".

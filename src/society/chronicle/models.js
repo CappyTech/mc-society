@@ -98,6 +98,42 @@ const placeSchema = new Schema({
 }, { versionKey: false });
 placeSchema.index({ owner: 1, name: 1 }, { unique: true });
 
+/**
+ * A shared build the village has to agree on.
+ *
+ * `contributed` and `delivered` are plain objects rather than sub-documents:
+ * item names are Minecraft ids and the shape is genuinely dynamic.
+ */
+const projectSchema = new Schema({
+    name: String,                    // a schematic in src/agent/npc/construction
+    proposer: String,
+    builder: String,
+    site: { x: Number, y: Number, z: Number },
+    status: { type: String, default: 'proposed' },   // proposed|agreed|building|complete|abandoned
+    votes: [{ voter: String, approve: Boolean, at: Date }],
+    required: { type: Object, default: {} },
+    delivered: { type: Object, default: {} },
+    contributed: { type: Object, default: {} },      // villager -> {item: n}
+    createdAt: { type: Date, default: Date.now },
+    agreedAt: Date,
+    completedAt: Date,
+    lastBuildAt: Date,
+}, { versionKey: false, minimize: false });
+
+/**
+ * At most one open proposal in the whole village.
+ *
+ * This is what lets `voteProject(approve)` take no project id: there is never
+ * any ambiguity about which proposal a vote refers to. It also saves ~20 prompt
+ * tokens per villager per turn and, more importantly, stops the model inventing
+ * ObjectIds -- which it would.
+ */
+projectSchema.index(
+    { status: 1 },
+    { unique: true, partialFilterExpression: { status: 'proposed' } },
+);
+projectSchema.index({ status: 1, createdAt: -1 });
+
 export const relKey = (from, to) => `${from}->${to}`;
 
 export function buildModels(conn) {
@@ -107,5 +143,6 @@ export function buildModels(conn) {
         Relationship: conn.model('Relationship', relationshipSchema, 'relationships'),
         Ledger: conn.model('Ledger', ledgerSchema, 'ledger'),
         Place: conn.model('Place', placeSchema, 'places'),
+        Project: conn.model('Project', projectSchema, 'projects'),
     };
 }

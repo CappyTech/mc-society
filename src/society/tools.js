@@ -172,6 +172,11 @@ export const CORE_TOOLS = [
     // control. `stay` is load-bearing: under forced tool calls there is no way
     // to emit nothing, so it is the only way to do nothing.
     'stay', 'stop', 'goal', 'endGoal', 'goToBed',
+    // governance. The ONLY project tool every villager carries -- proposing and
+    // building are scoped to the trades that do them. A village where nobody
+    // can vote is not a village, and the schema is deliberately tiny (one
+    // boolean, no project id) because this one is paid for eight times a turn.
+    'voteProject',
 ];
 
 /**
@@ -184,10 +189,10 @@ export const ROLE_TOOLS = {
     farmer:   ['useOn', 'attack'],
     smith:    ['smeltItem', 'clearFurnace', 'getCraftingPlan'],
     forester: ['smeltItem', 'clearFurnace'],           // charcoal
-    builder:  ['build', 'getCraftingPlan', 'digDown'],
+    builder:  ['build', 'proposeProject', 'workOnProject', 'getCraftingPlan', 'digDown'],
     cook:     ['smeltItem', 'clearFurnace'],
     scout:    ['attack', 'searchForEntity', 'followPlayer', 'goToSurface'],
-    keeper:   ['showVillagerTrades', 'tradeWithVillager', 'getCraftingPlan'],
+    keeper:   ['proposeProject', 'showVillagerTrades', 'tradeWithVillager', 'getCraftingPlan'],
 };
 
 /**

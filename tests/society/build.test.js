@@ -123,3 +123,45 @@ test('a clean build log reports no obstruction', async () => {
     assert.equal(blockedBy(''), '');
     assert.equal(blockedBy(undefined), '');
 });
+
+test('an agreed site overrides the builder\'s own remembered one', async () => {
+    // A village project is proposed at a place and voted through on that
+    // basis. Observed before this: the village agreed a house at 17,70,77 and
+    // the builder put it at -2,60,65, where she had started one previously.
+    const { buildStep } = await import('../../src/society/build.js');
+    const remembered = {};
+    const agent = {
+        name: 'Odile',
+        memory_bank: {
+            recallPlace: (k) => remembered[k],
+            rememberPlace: (k, x, y, z) => { remembered[k] = [x, y, z]; },
+        },
+        // No bot, so buildStep stops at the "can I see the ground" check --
+        // which is far enough to prove which site it chose.
+        bot: { blockAt: () => null },
+        npc: { constructions: { small_wood_house: loadStructure('small_wood_house') } },
+    };
+    remembered.build_small_wood_house = [-2, 60, 65];
+
+    const out = await buildStep(agent, 'small_wood_house', { site: { x: 17, y: 70, z: 77 } });
+    assert.match(out, /can't see the ground/);
+    assert.deepEqual(remembered.build_small_wood_house, [17, 70, 77],
+        'the agreed site was not adopted');
+});
+
+test('with no agreed site the builder resumes their own', async () => {
+    const { buildStep } = await import('../../src/society/build.js');
+    const remembered = { build_small_wood_house: [-2, 60, 65] };
+    const agent = {
+        name: 'Odile',
+        memory_bank: {
+            recallPlace: (k) => remembered[k],
+            rememberPlace: (k, x, y, z) => { remembered[k] = [x, y, z]; },
+        },
+        bot: { blockAt: () => null },
+        npc: { constructions: { small_wood_house: loadStructure('small_wood_house') } },
+    };
+    await buildStep(agent, 'small_wood_house');
+    assert.deepEqual(remembered.build_small_wood_house, [-2, 60, 65],
+        'a solo build should keep resuming the same site');
+});
