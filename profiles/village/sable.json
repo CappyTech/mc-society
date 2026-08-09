@@ -2,7 +2,7 @@
     "name": "Sable",
     "model": {
         "api": "lmstudio",
-        "model": "qwen/qwen3.5-9b-Q4_K_M"
+        "model": "qwen/qwen3.5-9b@q4_k_m"
     },
     "embedding": {
         "api": "lmstudio",

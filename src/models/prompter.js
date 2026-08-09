@@ -57,6 +57,10 @@ export class Prompter {
             max_tokens = this.profile.max_tokens;
 
         let chat_model_profile = selectAPI(this.profile.model);
+        // Carry the villager's name into the client. It is used only to spread
+        // the roster deterministically across whatever model instances are
+        // actually loaded -- see society/modelResolver.js.
+        chat_model_profile.params = { ...(chat_model_profile.params ?? {}), agent_name: name };
         this.chat_model = createModel(chat_model_profile);
 
         if (this.profile.code_model) {

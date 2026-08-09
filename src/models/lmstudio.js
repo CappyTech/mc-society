@@ -1,11 +1,19 @@
 import OpenAIApi from 'openai';
 import { strictFormat } from '../utils/text.js';
+import { resolveModel } from '../society/modelResolver.js';
 
 export class LMStudio {
     static prefix = 'lmstudio';
     constructor(model_name, url, params) {
         this.model_name = model_name;
         this.params = params;
+        this.agent_name = params?.agent_name ?? '';
+        // The id in a profile is a preference, not an instruction. It has been
+        // wrong three ways in one afternoon -- a quantisation suffix, a second
+        // instance nobody loaded, a sibling catalogue entry -- and every time
+        // the villagers connected, looked healthy and took zero turns. Reconcile
+        // against what LM Studio actually has. See society/modelResolver.js.
+        this._resolved = null;
         // LM Studio DOES enforce this once "API key" is enabled in its server
         // settings -- a hardcoded placeholder gets a flat 401. Read it from the
         // environment so the key stays out of the repo and out of profiles.
@@ -34,6 +42,19 @@ export class LMStudio {
     }
 
     /**
+     * The model id to actually send, resolved once against what is loaded.
+     *
+     * Falls back to the configured name on any failure, so an unreachable
+     * inference server stays one problem rather than two.
+     */
+    async model() {
+        if (this._resolved) return this._resolved;
+        const preferred = this.model_name || 'andy-4.1';
+        this._resolved = await resolveModel(preferred, this.agent_name);
+        return this._resolved;
+    }
+
+    /**
      * Ask for a mandatory tool call.
      *
      * This is the only reliable way to bound a reasoning model's output: given
@@ -49,7 +70,7 @@ export class LMStudio {
      */
     async sendToolRequest(turns, systemMessage, tools, { tool_choice = 'required', max_tokens = 1280 } = {}) {
         const messages = [{ role: 'system', content: systemMessage }].concat(strictFormat(turns));
-        const model = this.model_name || 'andy-4.1';
+        const model = await this.model();
 
         const pack = {
             model,
@@ -98,7 +119,7 @@ export class LMStudio {
 
     async sendRequest(turns, systemMessage, stop_seq='***') {
         let messages = [{ role: 'system', content: systemMessage }].concat(strictFormat(turns));
-        let model = this.model_name || 'andy-4.1';
+        let model = await this.model();
         let res;
 
         try {
