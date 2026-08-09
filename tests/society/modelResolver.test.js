@@ -139,3 +139,53 @@ test('base names ignore quantisation and instance suffixes, in either spelling',
     assert.equal(baseName('google/gemma-4-e4b'), 'google/gemma-4-e4b');
     assert.equal(baseName(null), '');
 });
+
+test('a choice is re-made against reality, not held for ever', async () => {
+    // THE BUG THIS EXISTS FOR. Caching the decision meant three villagers
+    // resolved to an instance at startup, LM Studio evicted it minutes later,
+    // and they went on requesting it by name for the lifetime of the process --
+    // recreating it every turn. The village was still creating models rather
+    // than using them, just more slowly, and logging that it was not.
+    //
+    // The list is cached briefly; the decision never is.
+    const { resolveModel, _resetForTests } = await import('../../src/society/modelResolver.js');
+
+    let serving = [loaded('qwen/qwen3.5-9b@q4_k_m'), loaded('qwen/qwen3.5-9b')];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async () => ({ ok: true, json: async () => ({ data: serving }) });
+
+    try {
+        _resetForTests();
+        const first = await resolveModel('qwen/qwen3.5-9b', 'Corin');
+        assert.ok(first, 'should resolve while two instances are up');
+
+        // LM Studio evicts one. The villager must not keep naming it.
+        serving = [loaded('qwen/qwen3.5-9b')];
+        _resetForTests();                       // stand in for the list TTL expiring
+        const second = await resolveModel('qwen/qwen3.5-9b', 'Corin');
+        assert.equal(second, 'qwen/qwen3.5-9b');
+
+        // And everything evicted means no model at all, not the last known one.
+        serving = [notLoaded('qwen/qwen3.5-9b')];
+        _resetForTests();
+        assert.equal(await resolveModel('qwen/qwen3.5-9b', 'Corin'), null);
+    } finally {
+        globalThis.fetch = originalFetch;
+        _resetForTests();
+    }
+});
+
+test('an unreachable server declines rather than reusing a stale list', async () => {
+    // A stale list would name a model that may since have been evicted, which
+    // is the same failure by a slower route.
+    const { resolveModel, _resetForTests } = await import('../../src/society/modelResolver.js');
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async () => { throw new Error('ECONNREFUSED'); };
+    try {
+        _resetForTests();
+        assert.equal(await resolveModel('qwen/qwen3.5-9b', 'Bram'), null);
+    } finally {
+        globalThis.fetch = originalFetch;
+        _resetForTests();
+    }
+});

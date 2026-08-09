@@ -72,8 +72,32 @@ const MIN_CONTEXT = 12000;
  */
 export const MIN_EMBED_CONTEXT = 512;
 const PROBE_TIMEOUT_MS = 4000;
+/**
+ * How long the list of loaded models may be trusted.
+ *
+ * Short, because it is the only thing standing between "choose from what is
+ * loaded" and "ask for something that no longer exists" -- and asking is what
+ * loads it. LM Studio evicts on its own timer, so a resolution made once at
+ * startup is a statement about a moment that has passed.
+ */
+const LIST_TTL_MS = 15000;
 
-let cache = null;
+/**
+ * The LIST is cached, not the DECISION.
+ *
+ * Caching the decision was a real bug and produced exactly the behaviour this
+ * module exists to prevent. Three villagers resolved to an instance at startup,
+ * LM Studio evicted it minutes later, and they went on requesting it by name
+ * for the lifetime of the process -- recreating it on every turn. The village
+ * was still creating models rather than using them, just more slowly and with
+ * a confident log line saying otherwise.
+ *
+ * Re-deciding every turn against a list at most LIST_TTL_MS old costs one HTTP
+ * request per villager per fifteen seconds and keeps the choice honest.
+ */
+let listCache = null;
+/** Last decision per villager, so a stable choice is not logged every turn. */
+const lastReason = new Map();
 
 /**
  * Strip instance and quantisation markers: `qwen/qwen3.5-9b@q4_k_m:2` and
@@ -176,31 +200,40 @@ export function chooseModel(preferred, models, who = '', minContext = MIN_CONTEX
  */
 export async function resolveModel(preferred, who = '', { baseUrl, apiKey, minContext = MIN_CONTEXT } = {}) {
     if (!preferred) return preferred;
-    if (cache?.preferred === preferred && cache?.who === who) return cache.model;
 
-    const url = (baseUrl || process.env.LMSTUDIO_BASE_URL || 'http://localhost:1234/v1')
-        .replace(/\/v1\/?$/, '') + '/api/v0/models';
-
-    let models = [];
-    try {
-        const res = await fetch(url, {
-            headers: { Authorization: `Bearer ${apiKey || process.env.LMSTUDIO_API_KEY || 'lm-studio'}` },
-            signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
-        });
-        if (res.ok) models = (await res.json())?.data ?? [];
-    } catch {
-        // An unreachable inference server is its own, very visible failure, and
-        // nothing can be resident on a host we cannot reach. Decline rather
-        // than guess.
-        console.warn(`[model] ${who || 'agent'}: cannot reach LM Studio to see what is loaded`);
-        return null;
+    let models;
+    if (listCache && Date.now() - listCache.at < LIST_TTL_MS) {
+        models = listCache.models;
+    } else {
+        const url = (baseUrl || process.env.LMSTUDIO_BASE_URL || 'http://localhost:1234/v1')
+            .replace(/\/v1\/?$/, '') + '/api/v0/models';
+        try {
+            const res = await fetch(url, {
+                headers: { Authorization: `Bearer ${apiKey || process.env.LMSTUDIO_API_KEY || 'lm-studio'}` },
+                signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
+            });
+            if (!res.ok) throw new Error(String(res.status));
+            models = (await res.json())?.data ?? [];
+            listCache = { at: Date.now(), models };
+        } catch {
+            // An unreachable inference server is its own, very visible failure,
+            // and nothing can be resident on a host we cannot reach. Decline
+            // rather than guess -- and do NOT fall back to a stale list, which
+            // would name a model that may since have been evicted.
+            console.warn(`[model] ${who || 'agent'}: cannot reach LM Studio to see what is loaded`);
+            return null;
+        }
     }
 
     const { model, reason } = chooseModel(preferred, models, who, minContext);
-    if (reason !== 'as configured') console.warn(`[model] ${who || 'agent'}: ${reason}`);
-    cache = { preferred, who, model };
+    // Logged on change only. Re-deciding every turn would otherwise print the
+    // same correction several times a minute for every villager.
+    if (reason !== 'as configured' && lastReason.get(who) !== reason) {
+        console.warn(`[model] ${who || 'agent'}: ${reason}`);
+    }
+    lastReason.set(who, reason);
     return model;
 }
 
 /** Test seam. */
-export function _resetForTests() { cache = null; }
+export function _resetForTests() { listCache = null; lastReason.clear(); }

@@ -20,7 +20,6 @@ export class LMStudio {
         // instance nobody loaded, a sibling catalogue entry -- and every time
         // the villagers connected, looked healthy and took zero turns. Reconcile
         // against what LM Studio actually has. See society/modelResolver.js.
-        this._resolved = null;
         // LM Studio DOES enforce this once "API key" is enabled in its server
         // settings -- a hardcoded placeholder gets a flat 401. Read it from the
         // environment so the key stays out of the repo and out of profiles.
@@ -54,11 +53,13 @@ export class LMStudio {
      * Falls back to the configured name on any failure, so an unreachable
      * inference server stays one problem rather than two.
      */
-    async model() {
-        if (this._resolved) return this._resolved;
-        const preferred = this.model_name || 'andy-4.1';
-        this._resolved = await resolveModel(preferred, this.agent_name);
-        return this._resolved;
+    model() {
+        // Deliberately NOT memoised here. resolveModel caches the list of
+        // loaded models for a few seconds and re-decides against it every time;
+        // holding the decision on the client would reintroduce the exact bug
+        // that caching solved -- a villager pinned to an instance LM Studio has
+        // since evicted, recreating it by name on every turn.
+        return resolveModel(this.model_name || 'andy-4.1', this.agent_name);
     }
 
     /**
