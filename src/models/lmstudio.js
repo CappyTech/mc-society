@@ -4,10 +4,17 @@ import { resolveModel } from '../society/modelResolver.js';
 
 export class LMStudio {
     static prefix = 'lmstudio';
+    /** Retries for a contended KV pool. See sendToolRequest. */
+    static POOL_RETRIES = 3;
+    static POOL_BACKOFF_MS = 1500;
     constructor(model_name, url, params) {
         this.model_name = model_name;
-        this.params = params;
-        this.agent_name = params?.agent_name ?? '';
+        // agent_name is ours, not OpenAI's. It has to come out of params before
+        // they are spread into the request pack, or it goes over the wire as an
+        // unknown field on every single call.
+        const { agent_name, ...rest } = params ?? {};
+        this.params = rest;
+        this.agent_name = agent_name ?? '';
         // The id in a profile is a preference, not an instruction. It has been
         // wrong three ways in one afternoon -- a quantisation suffix, a second
         // instance nobody loaded, a sibling catalogue entry -- and every time
@@ -81,8 +88,25 @@ export class LMStudio {
             ...(this.params || {}),
         };
 
+        // "Context size has been exceeded" from a SHARED KV pool is contention,
+        // not an oversized prompt: eight villagers against one instance's pool
+        // means only two or three turns fit at once, and the rest are refused
+        // outright. Refusing is transient -- the same prompt succeeds seconds
+        // later -- so a short backoff recovers a turn that would otherwise be
+        // thrown away. It is deliberately NOT a fix for a genuinely too-large
+        // prompt, which fails identically every time and exhausts the retries.
+        let completion;
         try {
-            const completion = await this.openai.chat.completions.create(pack);
+            for (let attempt = 0; ; attempt++) {
+                try {
+                    completion = await this.openai.chat.completions.create(pack);
+                    break;
+                } catch (e) {
+                    const contended = /context size has been exceeded/i.test(e?.message || '');
+                    if (!contended || attempt >= LMStudio.POOL_RETRIES) throw e;
+                    await new Promise((r) => setTimeout(r, LMStudio.POOL_BACKOFF_MS * (attempt + 1)));
+                }
+            }
             const choice = completion.choices[0];
             const calls = choice.message?.tool_calls ?? [];
 
