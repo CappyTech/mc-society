@@ -166,15 +166,33 @@ export class Prompter {
             prompt = prompt.replaceAll('$EXAMPLES', await examples.createExampleMessage(messages));
         if (prompt.includes('$MEMORY'))
             prompt = prompt.replaceAll('$MEMORY', this.agent.history.memory);
+        // What this villager should be dealing with right now: the top unmet
+        // survival need, or their claimed job. '' on most turns, which is the
+        // point -- see society/needs.js. Expanded BEFORE $VILLAGE because the
+        // two share one budget and this one has first claim on it.
+        let focus = '';
+        if (prompt.includes('$FOCUS')) {
+            try {
+                const { assess } = await import('../society/needs.js');
+                focus = await assess(this.agent);
+            } catch { /* a broken evaluator must not cost a turn */ }
+            prompt = prompt.replaceAll('$FOCUS', focus);
+        }
         // What this villager knows about the people around them. Resolves to ''
         // whenever the Chronicle is off, down or slow, so no upstream profile
         // is affected and a database outage costs a little context rather than
-        // a broken prompt. Capped at 900 chars -- see chronicle/brief.js.
+        // a broken prompt. Capped at 900 chars, SHARED with $FOCUS above --
+        // see chronicle/brief.js. Staying alive outranks remembering who owes
+        // you bread, so the brief is what gives way.
         if (prompt.includes('$VILLAGE')) {
             let village = '';
             try {
                 const chronicle = await import('../society/chronicle/chronicle.js');
-                village = await chronicle.brief(this.agent?.name, { focus: this.agent?.last_sender });
+                const { BRIEF_MAX_CHARS } = await import('../society/chronicle/brief.js');
+                village = await chronicle.brief(this.agent?.name, {
+                    focus: this.agent?.last_sender,
+                    budget: Math.max(0, BRIEF_MAX_CHARS - focus.length),
+                });
             } catch { /* no memory is a supported state */ }
             prompt = prompt.replaceAll('$VILLAGE', village);
         }

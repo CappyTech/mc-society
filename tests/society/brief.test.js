@@ -11,6 +11,14 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { renderBrief, BRIEF_MAX_CHARS } from '../../src/society/chronicle/brief.js';
+import { evaluate, renderFocus } from '../../src/society/needs.js';
+
+/** A villager who is out in the dark, to produce a realistic $FOCUS block. */
+const wellFed = (over = {}) => ({
+    name: 'Bram', role: 'miner', health: 20, food: 20,
+    inventory: { stone_sword: 1, stone_pickaxe: 1, stone_axe: 1 },
+    sleptSinceLogin: true, ...over,
+});
 
 const now = Date.now();
 const rel = (to, sentiment, lastReason = '', ageMs = 0) =>
@@ -123,4 +131,40 @@ test('every line is short enough to read', () => {
         focus: 'Nia', now,
     });
     for (const line of out.split('\n')) assert.ok(line.length <= 115, `line too long: ${line.length}`);
+});
+
+test('survival and the brief share one budget, and survival has first claim', () => {
+    // $FOCUS and $VILLAGE are two blocks with one 900-character allowance
+    // between them (see models/prompter.js). The point is that a healthy turn
+    // costs exactly what it cost before this layer existed, and a turn where
+    // survival bites pays for it out of the brief rather than out of the tool
+    // schemas. What must never happen is the two summing past the cap.
+    const exposed = wellFed({ timeOfDay: 15000, roofHeight: null, pos: { x: 900, y: 64, z: 900 } });
+    const focus = renderFocus(evaluate(exposed, {}, { now }));
+    assert.ok(focus.length > 0, 'fixture should raise a need');
+
+    const out = renderBrief({
+        me: 'Bram',
+        relationships: [rel('Nia', 50, 'y'.repeat(100)), rel('Corin', 40, 'y'.repeat(100)),
+                        rel('Wren', 30, 'y'.repeat(100)), rel('Ivo', 20, 'y'.repeat(100))],
+        focus: 'Nia',
+        project: 'Project small_wood_house needs 31 more oak_planks.',
+        now,
+        budget: BRIEF_MAX_CHARS - focus.length,
+    });
+
+    assert.ok(focus.length + out.length <= BRIEF_MAX_CHARS,
+        `focus ${focus.length} + brief ${out.length} > ${BRIEF_MAX_CHARS}`);
+    // The person in front of you is never what pays for it.
+    assert.ok(out.includes('Nia'), 'the focus relationship was dropped to make room');
+
+    // Worth knowing rather than assuming: at today's caps the two blocks
+    // cannot actually collide. A full brief is four lines trimmed to LINE_MAX
+    // plus a project line -- roughly 500 characters -- and $FOCUS can take at
+    // most 320, so 900 is never reached. The shared budget is a guarantee that
+    // this stays true if either cap is raised, not a trade being made every
+    // night. If this assertion ever fails, the drop order in renderBrief has
+    // started doing real work and the project line is what should vanish.
+    assert.ok(out.includes('small_wood_house'),
+        'the budgets have started to collide -- check the drop order still holds');
 });

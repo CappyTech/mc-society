@@ -15,7 +15,7 @@ import { connect, read, isUp, getState, getModels } from './connection.js';
 import { relKey } from './models.js';
 import { applyEvent } from './sentiment.js';
 import { deriveEvent, isSocial } from './recorder.js';
-import { renderBrief } from './brief.js';
+import { renderBrief, BRIEF_MAX_CHARS } from './brief.js';
 
 // Re-exported for src/society/projects, which needs the same guarded access
 // and must not reach around this module to the connection directly.
@@ -206,11 +206,16 @@ export function observePlace(owner, name, pos, shared = false) {
  *
  * @returns {Promise<string>} '' whenever the Chronicle has nothing, is slow, or is down
  */
-export async function brief(me, { focus = null, project = null } = {}) {
+export async function brief(me, { focus = null, project = null, budget = BRIEF_MAX_CHARS } = {}) {
     if (!me || !isUp()) return '';
 
+    // Budget is part of the cache key. It varies turn to turn now that $FOCUS
+    // has first claim on the shared 900 (see models/prompter.js), so caching on
+    // name and focus alone would serve a full-width brief back on a turn that
+    // had already spent 300 characters on staying alive.
     const cached = briefCache.get(me);
-    if (cached && Date.now() - cached.at < BRIEF_TTL_MS && cached.focus === focus) return cached.text;
+    if (cached && Date.now() - cached.at < BRIEF_TTL_MS &&
+        cached.focus === focus && cached.budget === budget) return cached.text;
 
     // The shared project, phrased for this villager: the builder is told what
     // is missing, a producer of a missing item is told to bring it, and anyone
@@ -235,8 +240,8 @@ export async function brief(me, { focus = null, project = null } = {}) {
 
     if (!rows) return '';
 
-    const text = renderBrief({ me, ...rows, focus, project: projectLine });
-    briefCache.set(me, { at: Date.now(), text, focus });
+    const text = renderBrief({ me, ...rows, focus, project: projectLine, budget });
+    briefCache.set(me, { at: Date.now(), text, focus, budget });
     return text;
 }
 
