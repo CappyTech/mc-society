@@ -230,9 +230,7 @@ test('every rendered line names a tool that villager actually carries', () => {
     // an entry as its command lands and the strict check below starts covering
     // it -- the list is meant to shrink to nothing, and an empty set here is
     // the goal state rather than a missing test.
-    const pending = new Set([
-        'workHere',     // the work board's engine
-    ]);
+    const pending = new Set([]);
 
     for (const [key, name] of Object.entries(TOOLS)) {
         if (pending.has(name)) continue;

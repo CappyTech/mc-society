@@ -359,6 +359,42 @@ export function evaluate(bot, graph = {}, ctx = {}) {
 }
 
 /**
+ * Turn a claimed job into the lines a villager sees. PURE.
+ *
+ * Naming who is working either side of them is the entire cohesion mechanism
+ * and costs one clause: it is the difference between eight bots each doing a
+ * task and a village building a road.
+ *
+ * @param {object} job the claimed job document
+ * @param {object[]} others jobs currently claimed by other villagers
+ */
+export function renderJob(job, others = []) {
+    if (!job) return null;
+    const what = {
+        road_segment: 'lay and light a stretch of the road',
+        lattice_cell: 'put a torch down so nothing spawns there',
+        fence_run: 'raise a fence along the drop',
+        chest: 'set up the shared chest',
+        bed: 'put a bed down',
+    }[job.kind] ?? 'work on this';
+
+    const lines = [trim(`The village needs someone to ${what}, at ${xyz(job.from)}. That is yours -- call ${TOOLS.work}.`)];
+
+    // What it takes, and where to get it. This is the join that keeps the
+    // territory layer feeding the economy instead of competing with it: a road
+    // is demand for Bram's cobblestone and Wren's charcoal.
+    const need = Object.entries(job.materials ?? {}).filter(([, n]) => n > 0);
+    if (need.length) {
+        const list = need.map(([item, n]) => `${n} ${item}`).join(' and ');
+        lines.push(trim(`It wants about ${list}. Take what you need from the village chest, or ask whoever makes it.`));
+    }
+    const names = others.map((o) => o.claimedBy).filter(Boolean);
+    if (names.length) lines.push(trim(`${names.join(' and ')} ${names.length > 1 ? 'are' : 'is'} working the same road.`));
+
+    return { tier: TIER.JOB, key: `job:${job._id}`, lines };
+}
+
+/**
  * Render the block. '' when there is nothing worth saying.
  *
  * A need and a job are mutually exclusive: exactly one thing is ever in the
@@ -461,7 +497,23 @@ export async function assess(agent) {
         }
         lastKey.set(me, need?.key ?? null);
 
-        return renderFocus(need, null);
+        // Below the slack line: survival is settled, so the village's work is
+        // what this villager is told about. Keeping a job they already hold
+        // comes first -- being reassigned every turn looks busy and finishes
+        // nothing.
+        let job = null;
+        if (!need) {
+            try {
+                const board = await import('./board.js');
+                job = await board.heldBy(me) ?? await board.claim(me, bot.role);
+                if (job) {
+                    const others = await board.neighbours(job.ref, me);
+                    job = renderJob(job, others);
+                }
+            } catch { /* no board is a supported state: they fall back to their trade */ }
+        }
+
+        return renderFocus(need, job);
     } catch {
         // A broken evaluator must never cost a turn. Silence here means the
         // villager falls through to their standing goal, which is the same

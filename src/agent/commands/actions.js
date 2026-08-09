@@ -562,6 +562,31 @@ export const actionsList = [
         })
     },
     {
+        // The engine of the whole territory layer, and zero parameters because
+        // the job it acts on was already stated in the villager's NEEDS/WORK
+        // block -- nothing is hidden from the model, it simply does not have to
+        // re-type coordinates it was just given. A 16-block road segment done
+        // one tool call at a time would be ten turns and ~30s of pathfinding
+        // churn on a server already carrying eight LLM agents.
+        name: '!workHere',
+        description: 'Get on with the village job you have been given.',
+        params: {},
+        perform: runAsAction(async (agent) => {
+            const [board, exec] = await Promise.all([
+                import('../../society/board.js'),
+                import('../../society/siteExec.js'),
+            ]);
+            const job = await board.heldBy(agent.name);
+            if (!job) {
+                skills.log(agent.bot, 'You have no village job right now.');
+                return;
+            }
+            const { done, reason } = await exec.executeJob(agent.bot, job);
+            if (done) board.complete(job._id, agent.name);
+            skills.log(agent.bot, `${job.kind.replace('_', ' ')}: ${reason}.`);
+        })
+    },
+    {
         // Zero parameters, which is the cheapest schema that can exist (~40
         // prompt tokens on every villager, every turn). It earns that because
         // a turn is one tool call: the alternative is digDown then placeHere

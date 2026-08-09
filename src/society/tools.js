@@ -171,6 +171,10 @@ export const CORE_TOOLS = [
     // require already being somewhere -- and a turn is one tool call, so it
     // has to be one tool. Zero parameters, ~40 tokens.
     'shelterHere',
+    // workHere is how the village builds anything together. Also zero
+    // parameters: the job is already in the villager's prompt block, so the
+    // schema does not have to carry coordinates the model was just handed.
+    'workHere',
     // speak
     'startConversation', 'endConversation',
     // control. `stay` is load-bearing: under forced tool calls there is no way
