@@ -56,6 +56,9 @@ export async function flush() {
         const ops = batch.flatMap((b) => b.relOps || []);
         if (ops.length) await models.Relationship.bulkWrite(ops, { ordered: false });
 
+        const agentOps = batch.flatMap((b) => b.agentOps || []);
+        if (agentOps.length) await models.Agent.bulkWrite(agentOps, { ordered: false });
+
         const ledgerOps = batch.flatMap((b) => b.ledgerOps || []);
         for (const op of ledgerOps) {
             if (op.open) await models.Ledger.create(op.open);
@@ -194,7 +197,15 @@ export function observeDeath(name, cause, pos) {
             detail: `${String(cause ?? '').slice(0, 80)}${pos ? ` at ${Math.round(pos.x)},${Math.round(pos.y)},${Math.round(pos.z)}` : ''}`,
         };
         if (buffer.length >= BUFFER_MAX) buffer.shift();
-        buffer.push({ event });
+        // agentOps, because `deaths` on the agent document was declared, defaulted
+        // to 0, and then never incremented by anything: 90 `died` events had
+        // accumulated against eight agents all still reading 0, so every consumer
+        // of that field (including the mcs-watch dashboard) showed zeros while
+        // villagers died in a loop.
+        buffer.push({
+            event,
+            agentOps: [{ updateOne: { filter: { _id: name }, update: { $inc: { deaths: 1 } } } }],
+        });
         scheduleFlush();
     } catch { /* never break a respawn */ }
 }
