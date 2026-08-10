@@ -4,6 +4,8 @@ import * as mc from '../utils/mcdata.js';
 import settings from './settings.js'
 import convoManager from './conversation.js';
 import { preemptsGoal } from '../society/modeGuard.js';
+import * as reflex from '../society/reflex.js';
+import * as cognition from '../society/cognition.js';
 
 async function say(agent, message) {
     agent.bot.modes.behavior_log += message + '\n';
@@ -176,9 +178,15 @@ const modes_list = [
             const enemy = world.getNearestEntityWhere(agent.bot, entity => mc.isHostile(entity), 16);
             if (enemy && await world.isClearPath(agent.bot, enemy)) {
                 say(agent, `Aaa! A ${enemy.name.replace("_", " ")}!`);
+                // FLIGHT_DISTANCE matches this mode's own 16-block trigger, and
+                // the timeout is a hard stop. Fleeing 24 from a threat detected
+                // at 16 meant avoidEnemies could only exit by finding ground with
+                // nothing hostile within 24 -- so the villager walked into
+                // unexplored chunks, met something new, and started again. 865
+                // identical log lines. See src/society/reflex.js.
                 execute(this, agent, async () => {
-                    await skills.avoidEnemies(agent.bot, 24);
-                });
+                    await skills.avoidEnemies(agent.bot, reflex.FLIGHT_DISTANCE);
+                }, reflex.FLIGHT_TIMEOUT_MS);
             }
         }
     },
@@ -348,10 +356,25 @@ async function execute(mode, agent, func, timeout=-1) {
         agent.self_prompter.stopLoop();
     let interrupted_action = agent.actions.currentActionLabel;
     mode.active = true;
+    reflex.noteRun(mode.name);
     let code_return = await agent.actions.runAction(`mode:${mode.name}`, async () => {
         await func();
     }, { timeout });
     mode.active = false;
+
+    // Restore the guards a mode action paused for itself.
+    //
+    // skills.avoidEnemies() and skills.stay() both pause self_preservation and
+    // NEITHER unpauses it -- so a fleeing villager had no drowning, lava or
+    // low-health guard for the whole flight, and got it back only incidentally
+    // when unPauseAll() ran on the next idle tick. The Chronicle's newest event
+    // when this was found was `Nia was slain by Drowned`.
+    //
+    // Done centrally rather than in skills.js: that file is 1,500+ lines and the
+    // largest merge-conflict surface against upstream, and every mode action that
+    // pauses a guard wants the same treatment.
+    agent.bot?.modes?.unpause?.('self_preservation');
+
     console.log(`Mode ${mode.name} finished executing, code_return: ${code_return.message}`);
 
     let should_reprompt = 
@@ -442,7 +465,12 @@ class ModeController {
         }
         for (let mode of modes_list) {
             let interruptible = mode.interrupts.some(i => i === 'all') || mode.interrupts.some(i => i === _agent.actions.currentActionLabel);
-            if (mode.on && !mode.paused && !mode.active && (_agent.isIdle() || interruptible)) {
+            // Reflexes outlive cognition, and a villager made only of reflexes
+            // thrashes rather than simplifies: 865 identical flights and 90 deaths
+            // during a sixteen-hour outage. reflex.js decides which may run;
+            // vital ones (drowning, creepers) always may. See src/society/reflex.js.
+            const allowed = reflex.shouldRunNow(mode.name, cognition.available());
+            if (mode.on && !mode.paused && !mode.active && allowed.run && (_agent.isIdle() || interruptible)) {
                 await mode.update(_agent);
             }
             if (mode.active) break;
