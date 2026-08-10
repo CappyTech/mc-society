@@ -207,7 +207,37 @@ export function profileFor(agent) {
         // external probe timing out after 300s. A per-agent cooldown is the
         // cheapest throttle that keeps the village responsive rather than
         // uniformly slow.
-        cooldown: 3000,
+        //
+        // 45s, arrived at by measurement rather than taste, and it is a
+        // CAPACITY figure rather than a pacing preference.
+        //
+        // society/inferenceSlots.js allows two concurrent requests (see the
+        // measurement there) and a turn takes 25-40s, so the whole village can
+        // finish roughly three to five turns a minute -- about one per villager
+        // every two minutes. History: 3s, then 12s, then 20s. At 20s the village
+        // still asked for four times what the GPU could serve, and the surplus is
+        // not free: each doomed turn assembles a full ~13,000-token prompt, queues
+        // two minutes for a slot, and is thrown away. Measured over eight minutes
+        // at 20s: 3 turns completed, 12 skipped for want of a slot.
+        //
+        // 45s does not eliminate the overcommit -- nothing on this side of the
+        // wire can, because demand is eight villagers and supply is one GPU.
+        //
+        // AND IT DOES NOT REDUCE THE WASTED WORK EITHER. That was the expectation
+        // and the measurement disproved it: skipped turns went from 12 to 31 per
+        // window. The reason is that this cooldown is not the binding delay --
+        // society/inferenceSlots.js queues for up to two minutes before skipping,
+        // by which time 45s has long since elapsed, so a villager becomes eligible
+        // again the instant it gives up. The queue wait dominates.
+        //
+        // A skip is cheap in GPU terms (it never reaches the model) but not free:
+        // the ~13,000-token prompt is assembled first, which is the CPU cost
+        // visible on the container. Fixing that properly means checking for a slot
+        // BEFORE assembling the prompt, in prompter.js, rather than tuning here.
+        //
+        // THE REAL LEVER IS INFERENCE CAPACITY: a second `lms load` (then raise
+        // LMSTUDIO_MAX_INFLIGHT) or a larger loaded_context_length.
+        cooldown: 45000,
         // Survival modes, for a world that can now kill them.
         //
         // torch_placing was off because modes.js `execute()` called

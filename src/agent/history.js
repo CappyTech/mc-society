@@ -1,6 +1,7 @@
 import { writeFileSync, readFileSync, mkdirSync, existsSync } from 'fs';
 import { NPCData } from './npc/data.js';
 import settings from './settings.js';
+import { isUsableMemory, scrubMemory } from '../society/memoryGuard.js';
 
 
 export class History {
@@ -32,24 +33,26 @@ export class History {
 
     async summarizeMemories(turns) {
         console.log("Storing memories...");
-        const summary = await this.agent.prompter.promptMemSaving(turns);
+        const result = await this.agent.prompter.promptMemSaving(turns);
 
         // Keep the previous memory rather than overwriting it with a failure.
         //
-        // promptMemSaving goes through sendRequest -- the prose path. Against a
-        // reasoning model that never terminates on open-ended output, that
-        // returns the adapter's error string, and this method stored it
-        // verbatim. The result was that seven of eight villagers' entire
-        // long-term memory was the literal text below, permanently: each new
-        // summarisation overwrote the last one with the same failure.
+        // TWO independent checks, because this has been got wrong twice. `ok`
+        // is the real contract -- promptMemSaving now reports failure out of
+        // band, so a failure is not a string and cannot be stored by accident.
+        // isUsableMemory is the backstop for text that arrived looking fine and
+        // is in fact a known adapter error string; the single definition site
+        // for those lives in src/society/memoryGuard.js, because the previous
+        // version of this guard was a literal compared in two places and they
+        // drifted the moment a new sentinel was introduced.
         //
         // A bad summary is worse than a stale one, so on failure we keep what
         // we had. See docs/reasoning-model.md for why the prose path is unfixed.
-        if (!summary || summary === 'My brain disconnected, try again.') {
+        if (!result?.ok || !isUsableMemory(result.text)) {
             console.warn('Memory summarisation produced nothing usable; keeping the previous memory.');
             return;
         }
-        this.memory = summary;
+        this.memory = result.text;
 
         if (this.memory.length > 500) {
             this.memory = this.memory.slice(0, 500);
@@ -99,7 +102,13 @@ export class History {
     async save() {
         try {
             const data = {
-                memory: this.memory,
+                // Last line of defence. summarizeMemories should never have set
+                // an unusable memory, and load() scrubs anything already on
+                // disk -- but this is the only function that WRITES the file, so
+                // enforcing it here is what makes "a stored failure" impossible
+                // rather than merely unlikely. It also means a poisoned file
+                // repairs itself on the next save with no migration.
+                memory: scrubMemory(this.memory),
                 turns: this.turns,
                 self_prompting_state: this.agent.self_prompter.state,
                 self_prompt: this.agent.self_prompter.isStopped() ? null : this.agent.self_prompter.prompt,
@@ -126,13 +135,13 @@ export class History {
                 return null;
             }
             const data = JSON.parse(readFileSync(this.memory_fp, 'utf8'));
-            this.memory = data.memory || '';
             // Discard a memory file already poisoned by the bug above. Guarding
             // only the write stops new corruption but never repairs the files
             // it already wrote: load() reads the error string back and save()
-            // writes it out again, so a villager keeps it forever. Five of
-            // eight were in exactly that state.
-            if (this.memory === 'My brain disconnected, try again.') this.memory = '';
+            // writes it out again, so a villager keeps it forever. Five of eight
+            // were in that state in 2026-07, and eight of eight in 2026-08 with
+            // a different sentinel -- which is why the list is now in one place.
+            this.memory = scrubMemory(data.memory || '');
             this.turns = data.turns || [];
             // Absent in every memory file written before this was fixed, so it
             // must stay optional -- those files are in production right now.

@@ -20,12 +20,17 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { chooseModel, baseName, MIN_EMBED_CONTEXT } from '../../src/society/modelResolver.js';
+import { chooseModel, baseName, roleOf, MIN_EMBED_CONTEXT, ROLE } from '../../src/society/modelResolver.js';
 
-const loaded = (id, ctx = 25600) =>
-    ({ id, state: 'loaded', loaded_context_length: ctx, max_context_length: 262144 });
-const notLoaded = (id, max = 262144) =>
-    ({ id, state: 'not-loaded', loaded_context_length: null, max_context_length: max });
+const loaded = (id, ctx = 25600, extra = {}) =>
+    ({ id, state: 'loaded', loaded_context_length: ctx, max_context_length: 262144, ...extra });
+const notLoaded = (id, max = 262144, extra = {}) =>
+    ({ id, state: 'not-loaded', loaded_context_length: null, max_context_length: max, ...extra });
+/** A chat row that declares its architecture, as /api/v0/models really does. */
+const chatRow = (id, arch, ctx = 25600) =>
+    loaded(id, ctx, { type: 'vlm', arch, capabilities: ['tool_use'] });
+const embedRow = (id = 'text-embedding-nomic-embed-text-v1.5', ctx = 2048) =>
+    loaded(id, ctx, { type: 'embeddings', arch: 'nomic-bert' });
 
 test('a model that is loaded is used unchanged', () => {
     const r = chooseModel('qwen/qwen3.5-9b@q4_k_m', [loaded('qwen/qwen3.5-9b@q4_k_m')], 'Bram');
@@ -72,18 +77,113 @@ test('nothing loaded at all means no model, not a guess', () => {
 });
 
 test('the operator is told what IS loaded, since that is the fix', () => {
-    const r = chooseModel('qwen/qwen3.5-9b', [loaded('google/gemma-4-e4b', 40704)], 'Bram');
+    // The embedder-only fixture is the real shape of the 2026-08-09 outage:
+    // something WAS resident, just nothing that could serve a turn. A bare list
+    // of ids hides that, so the role is printed too.
+    const r = chooseModel('qwen/qwen3.5-9b', [embedRow()], 'Bram');
     assert.equal(r.model, null);
-    assert.match(r.reason, /google\/gemma-4-e4b/);
-    assert.match(r.reason, /40704/, 'the context of what is loaded is not reported');
+    assert.match(r.reason, /text-embedding-nomic-embed-text-v1\.5/);
+    assert.match(r.reason, /embed/, 'the KIND of what is loaded is not reported');
+    assert.match(r.reason, /2048/, 'the context of what is loaded is not reported');
 });
 
-test('a different model family is never substituted', () => {
-    // The tool-calling design is tuned to one reasoning model's behaviour, so
-    // swapping Qwen for Gemma would change how every villager behaves while
-    // looking like a config that worked. Obviously broken beats subtly
-    // different.
-    assert.equal(chooseModel('qwen/qwen3.5-9b', [loaded('google/gemma-4-e4b', 40704)], 'Bram').model, null);
+test('THE 16-HOUR TEST: a loaded sibling is used instead of nothing', () => {
+    // The exact live catalogue of 2026-08-09, when every profile asked for
+    // qwen3.5-9b and only andy-4.2 was resident. Both are arch `qwen35`. The
+    // old policy was "same model family or nothing" and it chose nothing --
+    // every turn, for sixteen hours, while eight villagers stayed connected,
+    // burned 31% of a CPU on reflexes and died ninety times.
+    const rows = [
+        chatRow('andy-4.2', 'qwen35', 42752),
+        embedRow(),
+        notLoaded('google/gemma-4-e4b', 131072, { type: 'vlm', arch: 'gemma4' }),
+        notLoaded('qwen/qwen3.5-9b', 262144, { type: 'vlm', arch: 'qwen35' }),
+    ];
+    const r = chooseModel('qwen/qwen3.5-9b@q4_k_m', rows, 'Bram', { role: ROLE.CHAT });
+    assert.equal(r.model, 'andy-4.2');
+    assert.equal(r.available, true);
+    assert.match(r.reason, /same architecture/);
+});
+
+test('a different ARCHITECTURE loses to one that matches', () => {
+    // The replacement for the old same-family rule. What docs/reasoning-model.md
+    // tunes against is an architecture's behaviour under forced tool calls, and
+    // `arch` is what the API actually reports -- so a qwen35 sibling is
+    // preferred over a bigger, more capable Gemma.
+    const rows = [
+        chatRow('google/gemma-4-e4b', 'gemma4', 40704),
+        chatRow('andy-4.2', 'qwen35', 16000),
+        notLoaded('qwen/qwen3.5-9b', 262144, { type: 'vlm', arch: 'qwen35' }),
+    ];
+    assert.equal(chooseModel('qwen/qwen3.5-9b', rows, 'Bram').model, 'andy-4.2');
+});
+
+test('substitution can be switched off, restoring decline-or-nothing', () => {
+    // The escape hatch (MODEL_SUBSTITUTE=0), for when a surprising substitute is
+    // worse than an obviously dead village.
+    const rows = [chatRow('andy-4.2', 'qwen35', 42752)];
+    const r = chooseModel('qwen/qwen3.5-9b', rows, 'Bram', { substitute: false });
+    assert.equal(r.model, null);
+    assert.equal(r.available, false);
+});
+
+test('a substitute must still be RESIDENT -- the rule outranks it', () => {
+    // THE RULE is absolute; substitution is only a ranking among loaded rows.
+    // A perfect architecture match that is merely downloaded is still not a
+    // candidate, because naming it is what loads it.
+    const rows = [notLoaded('andy-4.2', 262144, { type: 'vlm', arch: 'qwen35' })];
+    assert.equal(chooseModel('qwen/qwen3.5-9b', rows, 'Bram').model, null);
+});
+
+test('a chat turn is never handed an embedding model', () => {
+    // Size alone would have caught this one (2,048 < 12,000), but role is the
+    // actual constraint and must not depend on that coincidence.
+    const rows = [embedRow('text-embedding-huge', 40000)];
+    assert.equal(chooseModel('qwen/qwen3.5-9b', rows, 'Bram', { role: ROLE.CHAT }).model, null);
+});
+
+test('an embedding request is never handed a chat model', () => {
+    // And this is the direction size does NOT catch: a 512 floor happily admits
+    // a 42,752-context reasoning model, which would then be asked for sentence
+    // vectors.
+    const rows = [chatRow('andy-4.2', 'qwen35', 42752)];
+    const r = chooseModel('some-missing-embedder', rows, 'Bram',
+        { role: ROLE.EMBED, minContext: MIN_EMBED_CONTEXT });
+    assert.equal(r.model, null);
+});
+
+test('a row with no type is classified by its id', () => {
+    // LM Studio's OpenAI-compatible /v1/models omits `type`. Guessing "chat" for
+    // an unknown row is the safe direction -- minContext still protects a turn.
+    assert.equal(roleOf({ id: 'text-embedding-nomic-embed-text-v1.5' }), ROLE.EMBED);
+    assert.equal(roleOf({ id: 'andy-4.2' }), ROLE.CHAT);
+    // vlm counts as chat, and that is load-bearing: the only chat model resident
+    // on this deployment reports type 'vlm'.
+    assert.equal(roleOf({ id: 'andy-4.2', type: 'vlm' }), ROLE.CHAT);
+    assert.equal(roleOf({ id: 'x', type: 'embeddings' }), ROLE.EMBED);
+});
+
+test('a family without tool_use loses to one that has it', () => {
+    // Every villager turn is a MANDATORY tool call, so a model without tool_use
+    // fails 100% of turns rather than degrading.
+    const rows = [
+        loaded('big-no-tools', 60000, { type: 'llm', arch: 'qwen35', capabilities: ['vision'] }),
+        loaded('small-tools', 16000, { type: 'llm', arch: 'qwen35', capabilities: ['tool_use'] }),
+    ];
+    assert.equal(chooseModel('qwen/qwen3.5-9b', rows, 'Bram').model, 'small-tools');
+});
+
+test('substitutes still split across instances, and stay put', () => {
+    // pick() must survive substitution: two loaded instances are two KV pools,
+    // and ranking individual rows rather than families would have put all eight
+    // villagers in one of them.
+    const rows = [chatRow('andy-4.2', 'qwen35'), chatRow('andy-4.2:2', 'qwen35')];
+    const peers = ['Bram', 'Nia', 'Corin', 'Wren', 'Odile', 'Tobias', 'Sable', 'Ivo'];
+    const picks = peers.map((n) => chooseModel('qwen/qwen3.5-9b', rows, n, { peers }).model);
+    const counts = {};
+    for (const p of picks) counts[p] = (counts[p] ?? 0) + 1;
+    assert.deepEqual(Object.values(counts).sort(), [4, 4], JSON.stringify(counts));
+    assert.equal(chooseModel('qwen/qwen3.5-9b', rows, 'Bram', { peers }).model, picks[0]);
 });
 
 test('an instance too small to hold a turn is treated as absent', () => {
@@ -100,7 +200,7 @@ test('embedding models are judged by their own scale', () => {
     // in existence, and quietly disable examples for ever.
     const rows = [loaded('text-embedding-nomic-embed-text-v1.5', 2048)];
     assert.equal(chooseModel('text-embedding-nomic-embed-text-v1.5', rows, 'Bram').model, null);
-    const r = chooseModel('text-embedding-nomic-embed-text-v1.5', rows, 'Bram', MIN_EMBED_CONTEXT);
+    const r = chooseModel('text-embedding-nomic-embed-text-v1.5', rows, 'Bram', { minContext: MIN_EMBED_CONTEXT, role: ROLE.EMBED });
     assert.equal(r.model, 'text-embedding-nomic-embed-text-v1.5');
     assert.equal(r.available, true);
 });
@@ -115,7 +215,7 @@ test('villagers split EVENLY across the instances that are up', () => {
     // position round-robins exactly.
     const models = [loaded('qwen/qwen3.5-9b@q4_k_m'), loaded('qwen/qwen3.5-9b@q4_k_m:2')];
     const peers = ['Bram', 'Nia', 'Corin', 'Wren', 'Odile', 'Tobias', 'Sable', 'Ivo'];
-    const picks = peers.map((n) => chooseModel('qwen/qwen3.5-9b', models, n, undefined, peers).model);
+    const picks = peers.map((n) => chooseModel('qwen/qwen3.5-9b', models, n, { peers }).model);
 
     const perInstance = {};
     for (const p of picks) perInstance[p] = (perInstance[p] ?? 0) + 1;
@@ -123,7 +223,7 @@ test('villagers split EVENLY across the instances that are up', () => {
 
     // Deterministic, so a villager does not hop between instances on a restart
     // and throw away the KV cache their prompt prefix had warmed.
-    assert.equal(chooseModel('qwen/qwen3.5-9b', models, 'Bram', undefined, peers).model, picks[0]);
+    assert.equal(chooseModel('qwen/qwen3.5-9b', models, 'Bram', { peers }).model, picks[0]);
 });
 
 test('three instances divide eight villagers as evenly as eight divides', () => {
@@ -131,7 +231,7 @@ test('three instances divide eight villagers as evenly as eight divides', () => 
     const peers = ['Bram', 'Nia', 'Corin', 'Wren', 'Odile', 'Tobias', 'Sable', 'Ivo'];
     const counts = {};
     for (const n of peers) {
-        const id = chooseModel('m', models, n, undefined, peers).model;
+        const id = chooseModel('m', models, n, { peers }).model;
         counts[id] = (counts[id] ?? 0) + 1;
     }
     assert.deepEqual(Object.values(counts).sort(), [2, 3, 3], JSON.stringify(counts));
@@ -141,8 +241,8 @@ test('a name outside the roster still lands somewhere, and stays there', () => {
     // Stability matters more than balance for a stray name: a villager who
     // moves between instances on a restart throws away KV locality.
     const models = [loaded('m@1'), loaded('m@2')];
-    const a = chooseModel('m', models, 'Stranger', undefined, ['Bram', 'Nia']).model;
-    const b = chooseModel('m', models, 'Stranger', undefined, ['Bram', 'Nia']).model;
+    const a = chooseModel('m', models, 'Stranger', { peers: ['Bram', 'Nia'] }).model;
+    const b = chooseModel('m', models, 'Stranger', { peers: ['Bram', 'Nia'] }).model;
     assert.equal(a, b);
     assert.ok(['m@1', 'm@2'].includes(a));
 });

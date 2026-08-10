@@ -9,6 +9,9 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { selectAPI, createModel } from './_model_map.js';
+// Static: memoryGuard is pure string policy with no dependencies, unlike the
+// society modules below it that reach mongoose and are imported lazily.
+import { LLMUnavailable } from '../society/memoryGuard.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -256,6 +259,7 @@ export class Prompter {
         const { buildTools, resolveToolCall, loadRegistry } = await import('../society/tools.js');
         const { renderTurn } = await import('../society/toolCommandBridge.js');
         const { beat } = await import('../society/heartbeat.js');
+        const { noteOk, noteTerminal, noteTransient } = await import('../society/cognition.js');
 
         await loadRegistry();
         // Scoped to the villager's trade. The full 54-tool surface is ~4,960
@@ -267,6 +271,16 @@ export class Prompter {
         const out = await this.chat_model.sendToolRequest(messages, prompt, this._society_tools);
         if (out.error) {
             console.warn(`${this.agent?.name ?? 'agent'}: tool turn failed -- ${out.error}`);
+            // A terminal failure cannot resolve inside a retry window, so say so
+            // by throwing rather than by returning '' -- which is
+            // indistinguishable from "the model had nothing to add" and cost
+            // three attempts, three probes and a stopped self-prompt loop per
+            // turn for sixteen hours.
+            if (out.terminal) {
+                noteTerminal(out.error);
+                throw new LLMUnavailable(out.error, { terminal: true });
+            }
+            noteTransient();
             return '';
         }
 
@@ -306,6 +320,7 @@ export class Prompter {
         // reachable, tool call valid, command resolved -- rather than anywhere
         // that merely proves the process is running. See society/heartbeat.js.
         beat(this.agent?.name);
+        noteOk();
 
         return turn;
     }
@@ -351,6 +366,12 @@ export class Prompter {
                 await this._saveLog(prompt, messages, generation, 'conversation');
 
             } catch (error) {
+                // Nothing an operator has not fixed yet will change within the
+                // next two attempts, so stop rather than burning them.
+                if (error instanceof LLMUnavailable && error.terminal) {
+                    console.warn(`${this.agent?.name ?? 'agent'}: cannot think -- ${error.message}`);
+                    return '';
+                }
                 console.error('Error during message generation or file writing:', error);
                 continue;
             }
@@ -387,23 +408,45 @@ export class Prompter {
         let prompt = this.profile.coding;
         prompt = await this.replaceStrings(prompt, messages, this.coding_examples);
 
-        let resp = await this.code_model.sendRequest(messages, prompt);
-        this.awaiting_coding = false;
+        let resp;
+        try {
+            resp = await this.code_model.sendRequest(messages, prompt);
+        } catch (err) {
+            if (!(err instanceof LLMUnavailable)) throw err;
+            console.warn(`Coding request unavailable: ${err.message}`);
+            resp = '```//no response```';
+        } finally {
+            // In a finally because it used to leak: sendRequest now throws, and
+            // an early return past this line leaves awaiting_coding true for the
+            // lifetime of the process -- every later coding request declines with
+            // "Already awaiting coding response".
+            this.awaiting_coding = false;
+        }
         await this._saveLog(prompt, messages, resp, 'coding');
         return resp;
     }
 
+    /**
+     * Summarise recent turns into long-term memory.
+     *
+     * Returns {ok, text} rather than a string, because the ONE caller stores what
+     * it gets and a failure string is indistinguishable from a summary. That
+     * substitution destroyed every villager's memory twice -- see
+     * src/society/memoryGuard.js.
+     */
     async promptMemSaving(to_summarize) {
         await this.checkCooldown();
         let prompt = this.profile.saving_memory;
         prompt = await this.replaceStrings(prompt, null, null, to_summarize);
-        let resp = await this.chat_model.sendRequest([], prompt);
-        await this._saveLog(prompt, to_summarize, resp, 'memSaving');
+        const out = await this.chat_model.chat([], prompt);
+        await this._saveLog(prompt, to_summarize, out.ok ? out.text : `[failed] ${out.error}`, 'memSaving');
+        if (!out.ok) return { ok: false, text: '', error: out.error };
+        let resp = out.text;
         if (resp?.includes('</think>')) {
             const [_, afterThink] = resp.split('</think>')
             resp = afterThink;
         }
-        return resp;
+        return { ok: true, text: resp };
     }
 
     async promptShouldRespondToBot(new_message) {
@@ -412,7 +455,15 @@ export class Prompter {
         let messages = this.agent.history.getHistory();
         messages.push({role: 'user', content: new_message});
         prompt = await this.replaceStrings(prompt, null, null, messages);
-        let res = await this.chat_model.sendRequest([], prompt);
+        let res;
+        try {
+            res = await this.chat_model.sendRequest([], prompt);
+        } catch (err) {
+            if (!(err instanceof LLMUnavailable)) throw err;
+            // Staying quiet is the safe default, and it is what a non-string
+            // response used to produce anyway -- via a TypeError on .trim().
+            return false;
+        }
         return res.trim().toLowerCase() === 'respond';
     }
 
@@ -420,7 +471,13 @@ export class Prompter {
         await this.checkCooldown();
         let prompt = this.profile.image_analysis;
         prompt = await this.replaceStrings(prompt, messages, null, null, null);
-        return await this.vision_model.sendVisionRequest(messages, prompt, imageBuffer);
+        try {
+            return await this.vision_model.sendVisionRequest(messages, prompt, imageBuffer);
+        } catch (err) {
+            if (!(err instanceof LLMUnavailable)) throw err;
+            console.warn(`Vision request unavailable: ${err.message}`);
+            return '';
+        }
     }
 
     async promptGoalSetting(messages, last_goals) {
@@ -433,7 +490,13 @@ export class Prompter {
         user_message = await this.replaceStrings(user_message, messages, null, null, last_goals);
         let user_messages = [{role: 'user', content: user_message}];
 
-        let res = await this.chat_model.sendRequest(user_messages, system_message);
+        let res;
+        try {
+            res = await this.chat_model.sendRequest(user_messages, system_message);
+        } catch (err) {
+            if (!(err instanceof LLMUnavailable)) throw err;
+            return null;      // already this function's parse-failure value
+        }
 
         let goal = null;
         try {

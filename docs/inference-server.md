@@ -50,28 +50,89 @@ only way to change it.
 
 ## Parallelism
 
-**Set parallel slots to the number of agents (8).** Fewer starves the village,
-and the shortfall compounds rather than merely slowing things down: every
-`startConversation` obliges the recipient to reply, which prompts a reply back,
-so demand grows with the square of village size while supply stays fixed.
+**`loaded_context_length` is a pool shared by all slots, not an allowance per
+slot.** This is the single most important fact on this page and it was got wrong
+here for a long time. More slots do not add capacity; they only divide the same
+pool more ways.
 
-Measured at 4 slots with 8 agents: 14 requests in flight, turns 31 seconds
-apart, and an external probe timing out after 300 seconds. The per-agent
-`cooldown` in each profile (3000ms) is the throttle on the other side of this.
+Measured 2026-08-10 against `andy-4.2` at `loaded_context_length: 42752`, using
+the real 36-tool schema and a villager-sized prompt (12,955 tokens) plus the
+adapter's 1,280-token output budget — which is reserved in the pool alongside the
+prompt, so a turn costs ~14,235:
+
+| Concurrent turns | Result |
+| --- | --- |
+| 1 | 1/1 emits a tool call |
+| 2 | 2/2 emit a tool call |
+| 3 | **0/3, all HTTP 400** |
+
+42,752 / 14,235 = 3.00, which is exactly where the cliff falls.
+
+**Measure with the real tool schema.** An earlier pass used synthetic
+9,558-token prompts, concluded four fitted, and shipped three — a real villager
+prompt is a third larger than that guess, and a third of turns kept failing.
+
+**Note the shape of that cliff: over capacity, EVERY request fails**, including
+the ones that would have fitted. So eight villagers thinking at once do not get
+eight slow turns or four fast ones — they get *nothing*, all of them, for as long
+as they keep trying together. On 2026-08-10 the revived village produced zero
+turns for this reason against a completely healthy inference server, with
+`Context size has been exceeded` on every one.
+
+Retries cannot fix it. Eight processes that fail together back off together and
+collide again; `LMStudio.POOL_RETRIES` existed already and all three attempts
+were consumed on every turn.
+
+### What actually bounds it
+
+`src/society/inferenceSlots.js` caps concurrent requests village-wide at
+**`LMSTUDIO_MAX_INFLIGHT`, default 2** — below the measured edge of three rather
+than on it, because villagers carry histories of different lengths and one long
+one tips the total over on its own.
+
+**Over-subscription does not always announce itself as a context error.** At a cap
+of three there were no context errors at all; instead 14 turns "produced prose
+instead of a tool call" against 7 that worked. That reads like a model-quality
+problem and is not one — every one of those failures had spent *exactly* the full
+1,280-token budget, and the same model with the same schema emits a clean tool
+call in ~300 tokens at concurrency 2. It was pool pressure truncating generation.
+If the villagers suddenly seem stupid, check the cap before blaming the model.
+
+A turn that cannot get a slot within two minutes **skips and retries later; it
+never proceeds unslotted.** Barging was tried and cost 42 context errors for 8
+completed turns — a skipped turn costs one villager one turn, a barge costs
+everyone theirs.
+
+The gate is a lock directory rather than module state because the eight villagers
+are eight separate OS processes (`src/process/agent_process.js`) — in-process
+counting would cap each villager at 2 and the village at 16.
+
+The per-agent `cooldown` in each profile is the throttle on the other side of
+this, and it must be sized against the same arithmetic: a turn takes 20–30s and
+two run at once, so the village finishes roughly five turns a minute between all
+eight villagers — about one each per 100s. At 3000ms, eight villagers asked for an
+order of magnitude more than the GPU could serve, and the surplus was not free: it
+assembled a full ~13,000-token prompt, queued for a slot, timed out and was thrown
+away. **It is 20000ms** (`src/society/roster.js` — regenerate the profiles after
+changing it).
+
+If you want the village to think faster, the levers in order are: load a second
+instance (then raise `LMSTUDIO_MAX_INFLIGHT`), raise `loaded_context_length`, or
+shrink the prompt. Raising the cap alone just moves the cliff closer.
 
 ## Quantisation, and the interaction between the two
 
-Context and parallelism both consume VRAM through the KV cache, which scales
-with *context × slots*. On a 12 GB card:
+Context consumes VRAM through the KV cache. On a 12 GB card:
 
-- `Q4_K_M` is ~6.55 GB and leaves room for 16384 × 8.
+- `Q4_K_M` is ~6.55 GB and leaves room for a large pool.
 - `Q8_0` is ~9.5 GB and does not. Loading it is a plausible way to end up with
   a 768-token context, or with the server dying outright — a `Channel Error`
   in LM Studio's log is often this.
 
-If the model will not load at 16384 × 8, reduce **context to 8192 before
-reducing parallelism**: 8192 is still comfortably above a full turn, whereas
-dropping slots below 8 reintroduces the starvation above.
+**Spend VRAM on context, not on slots.** Since the pool is shared (above), slots
+beyond what the pool can actually hold concurrently buy nothing and merely let
+more requests in to fail together. `loaded_context_length` is what decides how
+many villagers can think at once; the client-side cap should then be set from it.
 
 Note that requesting a quantisation-suffixed model id (`qwen/qwen3.5-9b-Q4_K_M`)
 does **not** select a quantisation — LM Studio resolves it to whichever build is

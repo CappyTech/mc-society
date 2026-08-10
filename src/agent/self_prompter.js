@@ -1,3 +1,5 @@
+import * as cognition from '../society/cognition.js';
+
 const STOPPED = 0
 const ACTIVE = 1
 const PAUSED = 2
@@ -75,6 +77,23 @@ export class SelfPrompter {
             
             let used_command = await this.agent.handleMessage('system', msg, -1);
             if (!used_command) {
+                // An outage is not the agent failing to use a command -- it is
+                // the agent never having been asked. Counting it toward
+                // MAX_NO_COMMAND made every village-wide inference failure
+                // PERMANENT: three fast refusals stopped the loop, and only a
+                // container restart could start it again. Loading a model would
+                // not have revived the village on 2026-08-09 for exactly this
+                // reason. Back off and keep waiting instead; the loop resumes on
+                // its own the moment a model is resident again.
+                if (!cognition.available()) {
+                    await new Promise(r => setTimeout(r, cognition.backoffMs()));
+                    continue;
+                }
+                // Unconditional pause on the failure path. The cooldown below is
+                // on the success branch only, so three failures used to arrive as
+                // fast as the server could produce them -- a hot loop that
+                // contributed most of 1,373 probe failures in a day.
+                await new Promise(r => setTimeout(r, this.cooldown));
                 no_command_count++;
                 if (no_command_count >= MAX_NO_COMMAND) {
                     let out = `Agent did not use command in the last ${MAX_NO_COMMAND} auto-prompts. Stopping auto-prompting.`;
