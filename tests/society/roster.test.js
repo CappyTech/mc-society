@@ -9,6 +9,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { VILLAGE_PLACE } from '../../src/society/territory.js';
 
 import { ROSTER, byName, personaFor, profileFor } from '../../src/society/roster.js';
 
@@ -83,5 +84,54 @@ test('a profile carries the role that scopes its tools', () => {
         assert.equal(p.society.role, a.role, 'role mismatch breaks tool scoping');
         assert.ok(p.model?.model, `${a.name} has no chat model`);
         assert.ok(p.cooldown > 0, `${a.name} has no cooldown and will starve the server`);
+    }
+});
+
+test('villagers run the torch mode again, now that it cannot kill the loop', () => {
+    // It used to be off, and the reason mattered: it retries every 5s and fails
+    // whenever the villager has no torches, while modes.js execute() stopped
+    // the self-prompt loop on EVERY mode execution -- so a mode failing on a
+    // timer killed the loop that makes a villager act at all. Measured: 28
+    // failures in 25 minutes.
+    //
+    // Disabling it treated the symptom. The cause is fixed in
+    // society/modeGuard.js (a mode may only preempt the goal loop if it already
+    // interrupts everything, which this one does not) and the mode now backs
+    // off exponentially. On hard difficulty, lit ground is survival, so leaving
+    // it off would cost more than it saved.
+    for (const a of ROSTER)
+        assert.equal(profileFor(a).modes?.torch_placing, true, `${a.name} is not lighting anything`);
+});
+
+test('every persona carries the survival block and the goal guard', () => {
+    // $FOCUS is where the ladder speaks. A persona without it is a villager
+    // with no survival layer at all -- and the four bind-mounted profile
+    // overrides in /mnt/data are the most likely way for exactly half the
+    // village to end up in that state, which reads as a model problem.
+    for (const agent of ROSTER) {
+        const p = personaFor(agent);
+        assert.ok(p.includes('$FOCUS'), `${agent.name} has no $FOCUS block`);
+        // Without this guard the model calls goal("stay alive") once and the
+        // villager permanently exits the economy. It is the single most likely
+        // way this whole layer fails.
+        assert.match(p, /do not change your standing goal to a survival task/i,
+            `${agent.name} is missing the standing-goal guard`);
+        // The place name has to be the one the graph actually uses, not a
+        // synonym -- a villager sent to somewhere that does not exist just
+        // stands still.
+        assert.ok(p.includes(`"${VILLAGE_PLACE}"`), `${agent.name} names no base`);
+    }
+});
+
+test('the scout alone is allowed to hold her ground', () => {
+    // cowardice makes a villager flee anything hostile within 16 blocks. A
+    // scout who runs from everything cannot scout, and her discoveries are
+    // what the village votes new settlements on.
+    for (const agent of ROSTER) {
+        const { modes } = profileFor(agent);
+        assert.equal(modes.cowardice, agent.role !== 'scout', `${agent.name}`);
+        assert.equal(modes.creeper_awareness, true, `${agent.name}`);
+        // Re-enabled once modeGuard stopped it killing the action loop.
+        assert.equal(modes.torch_placing, true, `${agent.name}`);
     }
 });

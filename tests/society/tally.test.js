@@ -145,3 +145,27 @@ test('a finished or unfunded project says nothing', () => {
     assert.equal(projectLine(done, { name: 'Wren', produces: ['planks'] }, { now }), '');
     assert.equal(projectLine(null, { name: 'Wren' }, { now }), '');
 });
+
+test('an idle village nudges the people who can propose', () => {
+    // The flaw that kept the whole mechanism from ever starting: over fifteen
+    // unprompted minutes villagers called voteProject three times and
+    // workOnProject twice, and nobody proposed anything -- because the brief
+    // was silent exactly when a nudge mattered.
+    const builder = { name: 'Odile', role: 'builder', produces: ['shelter'] };
+    const keeper = { name: 'Ivo', role: 'keeper', produces: ['brokerage'] };
+    const miner = { name: 'Bram', role: 'miner', produces: ['stone'] };
+
+    for (const state of [null, project({ status: 'complete' }), project({ status: 'abandoned' })]) {
+        assert.match(projectLine(state, builder, { now }), /could propose one/);
+        assert.match(projectLine(state, keeper, { now }), /could propose one/);
+        // Everyone else is told nothing -- they cannot propose, and the budget
+        // is better spent on a relationship line.
+        assert.equal(projectLine(state, miner, { now }), '');
+    }
+});
+
+test('an open proposal is never replaced by the nudge', () => {
+    const p = project();
+    assert.match(projectLine(p, { name: 'Wren', role: 'forester', produces: ['planks'] }, { now }),
+        /Vote on it/);
+});

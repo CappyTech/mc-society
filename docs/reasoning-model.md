@@ -35,12 +35,37 @@ Nothing else does.
 
 **Every agent turn is a mandatory tool call, never free text.** Speech included
 — an agent talks by calling `startConversation()`, the same way it mines by
-calling `collectBlocks()`. Budget at least 512 output tokens per turn; the
-adapter defaults to 768.
+calling `collectBlocks()`.
 
 Verified across the full 54-tool surface (`src/society/verify-tools.mjs`):
 reasoning stays bounded at **60–224 tokens**, turns take **2.0–5.9 s**, and the
 model picks correct tools with correct arguments.
+
+### But the budget must cover a HARD turn, not a verified one
+
+The adapter defaults to **2048** output tokens (`sendToolRequest`), raised from
+1280 on 2026-08-10. Those verification figures are from clean, single-question
+turns; a villager deciding what to do at night while exposed, mid-conversation,
+with a page of system messages behind it, reasons for much longer.
+
+At 1280 those turns were **cut off mid-thought**, and the failure was easy to
+misread: every one reported "spent all 1280 tokens", which looks like a model that
+would fill any budget. It is not — the same model emits a call in ~300 tokens on
+an easy turn. The logged reasoning ends mid-sentence:
+
+```
+[tool-miss] Tobias said instead: "Okay, I need to figure out what Tobias should
+do next... First, looking at the NEEDS section: It's night, and Tobias is in the
+open with nothing"
+```
+
+So: **budget for the turns that need thinking, not the ones that do not.** The
+`[tool-miss]` line exists to make this visible — before it, the prose was
+discarded and the logs showed only `full response: ""`.
+
+The output budget is **reserved in the KV pool alongside the prompt**, so raising
+it costs concurrency: see the arithmetic in
+[inference-server.md](inference-server.md) and `src/society/inferenceSlots.js`.
 
 ## Two behaviours to design around
 

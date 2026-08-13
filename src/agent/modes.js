@@ -3,6 +3,9 @@ import * as world from './library/world.js';
 import * as mc from '../utils/mcdata.js';
 import settings from './settings.js'
 import convoManager from './conversation.js';
+import { preemptsGoal } from '../society/modeGuard.js';
+import * as reflex from '../society/reflex.js';
+import * as cognition from '../society/cognition.js';
 
 async function say(agent, message) {
     agent.bot.modes.behavior_log += message + '\n';
@@ -138,6 +141,34 @@ const modes_list = [
         }
     },
     {
+        // Listed before cowardice, and separate from it, because neither
+        // existing mode is a correct creeper policy.
+        //
+        // On hard the fuse is 1.5 seconds and the blast kills an unarmoured
+        // villager -- and levels whatever they were building. cowardice
+        // triggers at 16 blocks but only when isClearPath succeeds, which is a
+        // pathfinder call that fails for a creeper standing behind a wall or on
+        // a ledge, leaving the villager stood there. self_defense would make
+        // them walk TOWARDS it.
+        //
+        // The correct policy has no path check and no combat, and it must fire
+        // inside 1.5s. That is three properties that make it a mode rather than
+        // anything the model could be told: one LLM turn is ~3 seconds.
+        name: 'creeper_awareness',
+        description: 'Back away from a creeper before it can detonate. Interrupts all actions.',
+        interrupts: ['all'],
+        on: true,
+        active: false,
+        update: async function (agent) {
+            const creeper = world.getNearestEntityWhere(agent.bot, (e) => e.name === 'creeper', 7);
+            if (!creeper) return;
+            say(agent, 'Creeper!');
+            execute(this, agent, async () => {
+                await skills.moveAwayFromEntity(agent.bot, creeper, 12);
+            });
+        }
+    },
+    {
         name: 'cowardice',
         description: 'Run away from enemies. Interrupts all actions.',
         interrupts: ['all'],
@@ -147,9 +178,15 @@ const modes_list = [
             const enemy = world.getNearestEntityWhere(agent.bot, entity => mc.isHostile(entity), 16);
             if (enemy && await world.isClearPath(agent.bot, enemy)) {
                 say(agent, `Aaa! A ${enemy.name.replace("_", " ")}!`);
+                // FLIGHT_DISTANCE matches this mode's own 16-block trigger, and
+                // the timeout is a hard stop. Fleeing 24 from a threat detected
+                // at 16 meant avoidEnemies could only exit by finding ground with
+                // nothing hostile within 24 -- so the villager walked into
+                // unexplored chunks, met something new, and started again. 865
+                // identical log lines. See src/society/reflex.js.
                 execute(this, agent, async () => {
-                    await skills.avoidEnemies(agent.bot, 24);
-                });
+                    await skills.avoidEnemies(agent.bot, reflex.FLIGHT_DISTANCE);
+                }, reflex.FLIGHT_TIMEOUT_MS);
             }
         }
     },
@@ -223,13 +260,21 @@ const modes_list = [
         on: true,
         active: false,
         cooldown: 5,
+        // Doubles on failure, resets on success, capped at ~5 minutes.
+        // Placing at your own feet with placeOn 'bottom' often has nothing to
+        // place against, and a spot that cannot take a torch does not become
+        // placeable by asking again five seconds later. Without this an
+        // unplaceable spot costs one attempt every five seconds forever.
+        backoff: 1,
+        max_backoff: 64,
         last_place: Date.now(),
         update: function (agent) {
             if (world.shouldPlaceTorch(agent.bot)) {
-                if (Date.now() - this.last_place < this.cooldown * 1000) return;
+                if (Date.now() - this.last_place < this.cooldown * this.backoff * 1000) return;
                 execute(this, agent, async () => {
                     const pos = agent.bot.entity.position;
-                    await skills.placeBlock(agent.bot, 'torch', pos.x, pos.y, pos.z, 'bottom', true);
+                    const placed = await skills.placeBlock(agent.bot, 'torch', pos.x, pos.y, pos.z, 'bottom', true);
+                    this.backoff = placed ? 1 : Math.min(this.backoff * 2, this.max_backoff);
                 });
                 this.last_place = Date.now();
             }
@@ -304,14 +349,32 @@ const modes_list = [
 ];
 
 async function execute(mode, agent, func, timeout=-1) {
-    if (agent.self_prompter.isActive())
+    // Only modes that interrupt everything may stop the goal loop. This used to
+    // be unconditional, so a cosmetic mode retrying on a timer switched the
+    // villager off entirely. See src/society/modeGuard.js.
+    if (preemptsGoal(mode) && agent.self_prompter.isActive())
         agent.self_prompter.stopLoop();
     let interrupted_action = agent.actions.currentActionLabel;
     mode.active = true;
+    reflex.noteRun(mode.name);
     let code_return = await agent.actions.runAction(`mode:${mode.name}`, async () => {
         await func();
     }, { timeout });
     mode.active = false;
+
+    // Restore the guards a mode action paused for itself.
+    //
+    // skills.avoidEnemies() and skills.stay() both pause self_preservation and
+    // NEITHER unpauses it -- so a fleeing villager had no drowning, lava or
+    // low-health guard for the whole flight, and got it back only incidentally
+    // when unPauseAll() ran on the next idle tick. The Chronicle's newest event
+    // when this was found was `Nia was slain by Drowned`.
+    //
+    // Done centrally rather than in skills.js: that file is 1,500+ lines and the
+    // largest merge-conflict surface against upstream, and every mode action that
+    // pauses a guard wants the same treatment.
+    agent.bot?.modes?.unpause?.('self_preservation');
+
     console.log(`Mode ${mode.name} finished executing, code_return: ${code_return.message}`);
 
     let should_reprompt = 
@@ -402,7 +465,12 @@ class ModeController {
         }
         for (let mode of modes_list) {
             let interruptible = mode.interrupts.some(i => i === 'all') || mode.interrupts.some(i => i === _agent.actions.currentActionLabel);
-            if (mode.on && !mode.paused && !mode.active && (_agent.isIdle() || interruptible)) {
+            // Reflexes outlive cognition, and a villager made only of reflexes
+            // thrashes rather than simplifies: 865 identical flights and 90 deaths
+            // during a sixteen-hour outage. reflex.js decides which may run;
+            // vital ones (drowning, creepers) always may. See src/society/reflex.js.
+            const allowed = reflex.shouldRunNow(mode.name, cognition.available());
+            if (mode.on && !mode.paused && !mode.active && allowed.run && (_agent.isIdle() || interruptible)) {
                 await mode.update(_agent);
             }
             if (mode.active) break;

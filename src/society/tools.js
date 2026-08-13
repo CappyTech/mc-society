@@ -167,6 +167,14 @@ export const CORE_TOOLS = [
     'givePlayer', 'consume', 'equip', 'putInChest', 'takeFromChest', 'viewChest', 'discard',
     // work
     'collectBlocks', 'craftRecipe', 'placeHere',
+    // survive. shelterHere is the only answer to nightfall that does not
+    // require already being somewhere -- and a turn is one tool call, so it
+    // has to be one tool. Zero parameters, ~40 tokens.
+    'shelterHere',
+    // workHere is how the village builds anything together. Also zero
+    // parameters: the job is already in the villager's prompt block, so the
+    // schema does not have to carry coordinates the model was just handed.
+    'workHere',
     // speak
     'startConversation', 'endConversation',
     // control. `stay` is load-bearing: under forced tool calls there is no way
@@ -186,7 +194,9 @@ export const CORE_TOOLS = [
  */
 export const ROLE_TOOLS = {
     miner:    ['digDown', 'goToSurface', 'smeltItem', 'clearFurnace'],
-    farmer:   ['useOn', 'attack'],
+    // tillAndSow is the farmer's whole job and was unexposed: her standing
+    // goal is to keep the fields planted and she had no way to plant.
+    farmer:   ['useOn', 'attack', 'tillAndSow'],
     smith:    ['smeltItem', 'clearFurnace', 'getCraftingPlan'],
     forester: ['smeltItem', 'clearFurnace'],           // charcoal
     builder:  ['build', 'proposeProject', 'workOnProject', 'getCraftingPlan', 'digDown'],

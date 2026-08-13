@@ -24,6 +24,8 @@
  * quiet -- that villager stops needing anyone and drops out of the social graph.
  */
 
+import { VILLAGE_PLACE } from './territory.js';
+
 export const ROSTER = [
     {
         name: 'Bram',
@@ -132,6 +134,28 @@ export function personaFor(agent) {
         'with that standing work. It is what keeps you working when nobody is talking',
         'to you -- without it you will stand still doing nothing.',
         '',
+        'You can die, and death is real loss: you drop what you are carrying and wake',
+        'somewhere else. Staying alive comes before your trade, in this order -- get',
+        'under cover or back to lit ground before dark, eat before you starve, keep an',
+        'axe, a pickaxe and a sword, and sleep in a bed so you wake near the village.',
+        'Once those are settled, get back to your work.',
+        '',
+        `The village holds ground together. Its settlements are remembered by name --`,
+        `call goToRememberedPlace with "${VILLAGE_PLACE}" to get to the shared base, or`,
+        '"spawn" for where everyone wakes after dying. On lit ground you are safe at',
+        'night; away from it you are not. Food and spare tools go in the shared chest,',
+        'so look to the village stores before you go off alone: the others put things',
+        'in so that you can take them out.',
+        '',
+        // The guard on the slack line. Without it the model calls
+        // goal("stay alive") once and the villager permanently exits the
+        // economy -- the single most likely way this whole layer fails.
+        'Anything under NEEDS below is what you have noticed about your own situation',
+        'right now. It is not an order from anyone. Deal with it in your own way, in',
+        'character -- and do not change your standing goal to a survival task. Handle',
+        'it, then carry on with your trade.',
+        '$FOCUS',
+        '',
         'Every turn you take exactly one action by calling one tool. There is no way to',
         'say nothing -- if you genuinely have nothing to do, call stay. Speak by calling',
         'startConversation. Keep speech to one or two short sentences, in character.',
@@ -183,7 +207,60 @@ export function profileFor(agent) {
         // external probe timing out after 300s. A per-agent cooldown is the
         // cheapest throttle that keeps the village responsive rather than
         // uniformly slow.
-        cooldown: 3000,
+        //
+        // 45s, arrived at by measurement rather than taste, and it is a
+        // CAPACITY figure rather than a pacing preference.
+        //
+        // society/inferenceSlots.js allows two concurrent requests (see the
+        // measurement there) and a turn takes 25-40s, so the whole village can
+        // finish roughly three to five turns a minute -- about one per villager
+        // every two minutes. History: 3s, then 12s, then 20s. At 20s the village
+        // still asked for four times what the GPU could serve, and the surplus is
+        // not free: each doomed turn assembles a full ~13,000-token prompt, queues
+        // two minutes for a slot, and is thrown away. Measured over eight minutes
+        // at 20s: 3 turns completed, 12 skipped for want of a slot.
+        //
+        // 45s does not eliminate the overcommit -- nothing on this side of the
+        // wire can, because demand is eight villagers and supply is one GPU.
+        //
+        // AND IT DOES NOT REDUCE THE WASTED WORK EITHER. That was the expectation
+        // and the measurement disproved it: skipped turns went from 12 to 31 per
+        // window. The reason is that this cooldown is not the binding delay --
+        // society/inferenceSlots.js queues for up to two minutes before skipping,
+        // by which time 45s has long since elapsed, so a villager becomes eligible
+        // again the instant it gives up. The queue wait dominates.
+        //
+        // A skip is cheap in GPU terms (it never reaches the model) but not free:
+        // the ~13,000-token prompt is assembled first, which is the CPU cost
+        // visible on the container. Fixing that properly means checking for a slot
+        // BEFORE assembling the prompt, in prompter.js, rather than tuning here.
+        //
+        // THE REAL LEVER IS INFERENCE CAPACITY: a second `lms load` (then raise
+        // LMSTUDIO_MAX_INFLIGHT) or a larger loaded_context_length.
+        cooldown: 45000,
+        // Survival modes, for a world that can now kill them.
+        //
+        // torch_placing was off because modes.js `execute()` called
+        // `self_prompter.stopLoop()` on EVERY mode execution, so this mode
+        // failing on a 5-second timer killed the loop that makes a villager
+        // act at all -- 28 failures in 25 minutes, measured. That root cause
+        // is fixed in society/modeGuard.js: a mode may only preempt the goal
+        // loop if it already interrupts every action, which this one does not.
+        // It also backs off exponentially now. Safe to run, and it is the
+        // opportunistic complement to lighting ground deliberately.
+        //
+        // cowardice is on for everyone except the scout, who is paid to go and
+        // look at things and cannot do it while fleeing from everything. It is
+        // listed before self_defense in modes_list and both interrupt all, so
+        // the ordering already gives "run at 16 blocks, fight only what has
+        // already closed to 8".
+        modes: {
+            torch_placing: true,
+            cowardice: agent.role !== 'scout',
+            creeper_awareness: true,
+            self_defense: true,
+            self_preservation: true,
+        },
         // Village metadata. Ignored by upstream, read by the Chronicle in phase 2.
         society: {
             role: agent.role,

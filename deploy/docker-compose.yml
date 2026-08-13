@@ -34,8 +34,30 @@ services:
       SIMULATION_DISTANCE: "8"
       MAX_PLAYERS: "20"
       SPAWN_PROTECTION: "0"
-      # A society needs a stable stage: no wandering mobs wrecking builds while
-      # we debug, and no night-time combat pressure until phase 3 adds needs.
+      # STILL EASY, DELIBERATELY. Phase 3 has landed in the code -- survival
+      # ladder, lit ground, work board -- but it is being watched on easy first.
+      # At hard, every bug in the new layer presents as "a villager died", which
+      # is indistinguishable from the feature working correctly.
+      #
+      # To turn the pressure on, set this to "hard" and restart Paper.
+      #
+      # playersSleepingPercentage is APPLIED (2026-08-10, set to 30 via RCON):
+      #
+      #   docker exec mcs-paper rcon-cli gamerule playersSleepingPercentage 30
+      #
+      # Three of eight asleep now skips the night, turning "each villager must
+      # survive every night alone" into "the village survives the night" -- the
+      # single largest brake on a death spiral, and it costs nothing. It was
+      # turned on because every villager's long-term memory had become a list of
+      # the ways it had died; 90 deaths accumulated on EASY.
+      #
+      # NOTE it is a gamerule, not a server property, so it lives in level.dat
+      # and survives restarts -- but a NEW world starts at 100 again. Re-apply it
+      # if the world is ever regenerated; nothing in this file will do it for you.
+      #
+      # keepInventory stays false on purpose: the ladder's tool rung only means
+      # something if tools are actually lost. It is the relief valve if the
+      # first nights go badly.
       DIFFICULTY: "easy"
       MODE: "survival"
       LEVEL_TYPE: "minecraft:normal"

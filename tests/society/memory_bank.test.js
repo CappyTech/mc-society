@@ -30,7 +30,15 @@ function fakeAgent(name, { memory_bank = new MemoryBank(), summary = null } = {}
         last_sender: null,
         self_prompter: { state: 'stopped', isStopped: () => true, prompt: null },
         task: { taskStartTime: 0 },
-        prompter: { promptMemSaving: () => Promise.resolve(summary) },
+        // promptMemSaving reports failure out of band now -- {ok, text} rather
+        // than a string, so a failure cannot be mistaken for a summary. `summary`
+        // here is still "what the model produced", which is what these tests are
+        // about; null means the call itself failed.
+        prompter: {
+            promptMemSaving: () => Promise.resolve(
+                summary === null ? { ok: false, text: '', error: 'unavailable' } : { ok: true, text: summary },
+            ),
+        },
     };
 }
 

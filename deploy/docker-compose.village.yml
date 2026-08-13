@@ -85,19 +85,21 @@ services:
       # command end-to-end while the inference server is unavailable.
       - /home/jack/code/mc-society/scripts:/app/scripts:ro
       - /home/jack/code/mc-society/keys.json:/app/keys.json:ro
-      # Which LM Studio *instance* a villager talks to is deployment config, not
-      # source -- so it lives here rather than in the repo's profiles. Each
-      # LM Studio instance has its own shared KV pool (20,736 tokens); a turn is
-      # ~9,500, so ~2 villagers fit per pool concurrently and 8 on one instance
-      # overflow it ("Context size has been exceeded"). These four are pinned to
-      # the second instance, addressed by its ":2" identifier -- a second
-      # instance is NOT transparent load-balancing, nothing reaches it unless a
-      # profile names it. The files are copies of the repo profiles with only
-      # model.model changed; if a persona changes upstream, re-copy them.
-      - ./profile-overrides/nia.json:/app/profiles/village/nia.json:ro
-      - ./profile-overrides/odile.json:/app/profiles/village/odile.json:ro
-      - ./profile-overrides/sable.json:/app/profiles/village/sable.json:ro
-      - ./profile-overrides/tobias.json:/app/profiles/village/tobias.json:ro
+      # PROFILE OVERRIDES ARE UNMOUNTED (2026-08-10). They pinned four villagers
+      # to a second LM Studio instance by its ":2" identifier; only one instance
+      # is loaded now, so all four had drifted to the SAME model id as the repo
+      # profiles and pinned nothing.
+      #
+      # They are not merged, they REPLACE the whole profile file -- so as stale
+      # full copies they silently froze four villagers' cooldown at 3000ms when
+      # the roster raised it to 12000, and would freeze any future persona change
+      # the same way. Concurrency is now handled in code and across all eight
+      # villagers by src/society/inferenceSlots.js, which is a better home for it
+      # than four hand-copied files.
+      #
+      # ./profile-overrides/ and scripts/sync-profile-overrides.mjs are kept for
+      # when a second instance is loaded again. Re-copy from the repo profiles
+      # before remounting; do not trust what is in there now.
       # Agent memory lives here. Unmounted it dies with the container, so every
       # relaunch was total amnesia -- which defeats the whole point of a village
       # that remembers. Phase 2 moves this into the Chronicle; until then the

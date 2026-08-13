@@ -117,8 +117,24 @@ export function outstanding(project) {
  * @param {object} viewer  the roster entry of whoever is reading
  * @returns {string} '' when this villager has nothing to do with it
  */
+/** Trades that may put a proposal to the village. */
+export const CAN_PROPOSE = new Set(['builder', 'keeper']);
+
 export function projectLine(project, viewer, { now = Date.now() } = {}) {
-    if (!project) return '';
+    // No shared project at all.
+    //
+    // This used to render nothing, which turned out to be the flaw that kept
+    // the whole mechanism from starting: over fifteen unprompted minutes
+    // villagers called voteProject three times and workOnProject twice, and
+    // nobody ever proposed anything -- because the one moment a nudge matters,
+    // an idle village with nothing agreed, was the one moment the brief was
+    // silent. Only the two trades that can propose ever see this line.
+    if (!project || ['complete', 'abandoned'].includes(project.status)) {
+        return CAN_PROPOSE.has(viewer?.role)
+            ? 'The village has no shared project. You could propose one for everyone to vote on.'
+            : '';
+    }
+
     const state = tally(project, { now });
 
     if (state.status === 'proposed') {

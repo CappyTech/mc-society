@@ -92,3 +92,13 @@ export async function close() {
 
 /** Test seam: force a state without a database. */
 export function _setStateForTests(s) { state = s; }
+
+/**
+ * Test seam: stand in fake models so the WRITE paths are reachable without Mongo.
+ *
+ * Without this, every test could only assert that the module stays silent when
+ * the database is absent -- which is how `deaths` came to be declared, defaulted
+ * to 0 and never incremented by anything, with 90 died events against eight
+ * agents all still reading zero.
+ */
+export function _setModelsForTests(m) { models = m; state = m ? 'up' : 'off'; }

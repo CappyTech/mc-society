@@ -134,7 +134,113 @@ projectSchema.index(
 );
 projectSchema.index({ status: 1, createdAt: -1 });
 
+/**
+ * A settlement. The village's territory is a graph, and these are its nodes.
+ *
+ * `_id` IS THE NAME. It is a slug -- 'spawn', 'hearth', 'iron_ridge' -- and it
+ * is the same string the villagers pass to `!goToRememberedPlace`, so it must
+ * survive the tool->text->parser round trip byte-identically: lowercase, no
+ * spaces, no punctuation (see toolCommandBridge.js, whose argument regex has no
+ * unescaping).
+ *
+ * Making the name the primary key is also what makes this leaderless. Eight
+ * independent processes have no coordinator and no startup order, so every
+ * write here is a $setOnInsert upsert on a deterministic id: all eight may race
+ * to found the same settlement and the result is identical. Anything requiring
+ * an election would deadlock.
+ */
+const nodeSchema = new Schema({
+    _id: String,
+    kind: { type: String, default: 'outpost' },   // spawn|hearth|outpost
+    label: String,
+    centre: { x: Number, y: Number, z: Number },
+    radius: { type: Number, default: 24 },
+    purpose: String,                              // why this site: iron, wood, grass...
+    // Safety is geometric, never measured. block.light and skyLight are bugged
+    // in this version (see queries.js), so "is it safe here" is answered by
+    // counting torches on a lattice rather than by asking the world how dark it
+    // is. `safe` is litCells === cells.
+    lit: {
+        cells: { type: Number, default: 0 },
+        litCells: { type: Number, default: 0 },
+        safe: { type: Boolean, default: false },
+        checkedBy: String,
+        checkedAt: Date,
+    },
+    // Fences do NOT stop spawns -- spiders climb them and skeletons shoot over.
+    // They keep villagers in, keep zombies and creepers from strolling through,
+    // and make pathing predictable. Lighting is what does the safety work.
+    fenced: {
+        runs: { type: Number, default: 0 },
+        doneRuns: { type: Number, default: 0 },
+        checkedAt: Date,
+    },
+    chest: { x: Number, y: Number, z: Number },
+    beds: [{ x: Number, y: Number, z: Number, claimedBy: String, at: Date }],
+    foundedBy: String,
+    projectId: String,
+    foundedAt: { type: Date, default: Date.now },
+    updatedAt: { type: Date, default: Date.now },
+}, { _id: false, versionKey: false, minimize: false });
+
+/**
+ * A road between two settlements: the graph's edges.
+ *
+ * `_id` is the two endpoint names sorted and joined, so a road from the hearth
+ * to spawn and one from spawn to the hearth are the same document and cannot
+ * both be created. See `edgeKey`.
+ */
+const edgeSchema = new Schema({
+    _id: String,
+    a: String,
+    b: String,
+    segments: { type: Number, default: 0 },
+    doneSegments: { type: Number, default: 0 },
+    open: { type: Boolean, default: false },      // every segment built and lit
+    checkedAt: Date,
+    openedAt: Date,
+    createdAt: { type: Date, default: Date.now },
+}, { _id: false, versionKey: false });
+
+/**
+ * The village work board: one job, one villager, claimed atomically.
+ *
+ * This is how eight processes move as one organism without a leader. A claim
+ * is a single findOneAndUpdate, first-writer-wins; there is no lock and no
+ * coordinator.
+ *
+ * `_id` is deterministic ('road:spawn--hearth:seg:07') for the same reason the
+ * nodes' are: all eight villagers may generate the same job list from the same
+ * agreed project and the result is byte-identical, so generation needs no
+ * coordination either.
+ */
+const jobSchema = new Schema({
+    _id: String,
+    kind: String,                    // road_segment|lattice_cell|fence_run|chest|bed
+    ref: String,                     // the node or edge id this serves
+    from: { x: Number, y: Number, z: Number },
+    to: { x: Number, y: Number, z: Number },
+    spec: { type: Object, default: {} },
+    materials: { type: Object, default: {} },
+    priority: { type: Number, default: 0 },
+    roles: [String],                 // empty means anyone
+    claimedBy: String,
+    claimedAt: Date,
+    // Claims expire. On hard difficulty a villager WILL die mid-job, and
+    // without this that segment is orphaned for ever.
+    attempts: { type: Number, default: 0 },
+    doneAt: Date,
+    doneBy: String,
+    createdAt: { type: Date, default: Date.now },
+}, { _id: false, versionKey: false, minimize: false });
+
+jobSchema.index({ doneAt: 1, priority: -1 });
+jobSchema.index({ claimedBy: 1, doneAt: 1 });
+
 export const relKey = (from, to) => `${from}->${to}`;
+
+/** Endpoint order must never create a second road. */
+export const edgeKey = (a, b) => [a, b].sort().join('--');
 
 export function buildModels(conn) {
     return {
@@ -144,5 +250,8 @@ export function buildModels(conn) {
         Ledger: conn.model('Ledger', ledgerSchema, 'ledger'),
         Place: conn.model('Place', placeSchema, 'places'),
         Project: conn.model('Project', projectSchema, 'projects'),
+        Node: conn.model('Node', nodeSchema, 'nodes'),
+        Edge: conn.model('Edge', edgeSchema, 'edges'),
+        Job: conn.model('Job', jobSchema, 'jobs'),
     };
 }

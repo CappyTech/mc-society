@@ -74,6 +74,11 @@ const HANDLERS = {
         return { kind: 'withdrew', item: args[0], qty: Number(args[1]) || 1 };
     },
     '!goal': (args) => ({ kind: 'goal_set', detail: clean(args[0]) }),
+    // Naming a place is how the village agrees where anything is, and naming
+    // one "village" is how it founds its base -- see territory.notePlaceNamed.
+    // The command itself only ever wrote to the villager's own memory bank, so
+    // without this the other seven could never learn the name.
+    '!rememberHere': (args) => ({ kind: 'named_place', detail: clean(args[0]) }),
     '!build': (args, result) => {
         if (/is finished/.test(result || '')) return { kind: 'build_done', detail: clean(args[0]) };
         if (/I worked on/.test(result || '')) return { kind: 'build_progress', detail: clean(args[0]) };

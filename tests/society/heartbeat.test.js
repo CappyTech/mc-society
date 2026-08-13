@@ -31,7 +31,15 @@ test('a fresh beat is healthy and says how fresh', () => {
     beat('Odile');
     const res = check();
     assert.equal(res.ok, true);
-    assert.ok(res.ageMs >= 0 && res.ageMs < 5000);
+    // Tolerant of a small negative age on purpose. `ageMs` is
+    // `Date.now() - statSync().mtimeMs`, and the filesystem's timestamp clock
+    // can sit a millisecond or two ahead of Date.now(), so a beat taken moments
+    // ago can read as very slightly in the future. Production is unaffected --
+    // a negative age is still comfortably within maxAgeMs and reports healthy
+    // -- but asserting `>= 0` here made the suite fail about one run in four
+    // under load, which is exactly the kind of wandering result that gets a
+    // test commented out rather than believed.
+    assert.ok(res.ageMs > -1000 && res.ageMs < 5000, `ageMs was ${res.ageMs}`);
     assert.match(res.reason, /last turn/);
 });
 
