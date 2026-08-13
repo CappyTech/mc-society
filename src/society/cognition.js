@@ -95,7 +95,14 @@ export function lastReason() {
     return state.ok ? '' : state.reason;
 }
 
-/** Test seam. */
+/**
+ * Test seam.
+ *
+ * Spreads FRESH rather than restating it: the literal here omitted `waitMs`, so
+ * a reset left backoffMs() returning undefined -- and a caller sleeping
+ * setTimeout(undefined) waits 0ms, i.e. the hot loop this module exists to
+ * prevent, reachable only from tests and therefore invisible in them.
+ */
 export function _resetForTests() {
-    state = { ok: true, since: 0, reason: '', consecutive: 0 };
+    state = { ...FRESH };
 }

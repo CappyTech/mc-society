@@ -135,7 +135,7 @@ export async function claim(who, role, { now = Date.now() } = {}) {
             // board would quietly empty itself. Expiry already handles a claim
             // nobody acts on; attempts count real, failed work.
             { $set: { claimedBy: who, claimedAt: new Date(now) } },
-            { sort: { priority: -1, _id: 1 }, returnDocument: 'after', new: true },
+            { sort: { priority: -1, _id: 1 }, returnDocument: 'after' },
         ).lean();
     } catch {
         return null;
